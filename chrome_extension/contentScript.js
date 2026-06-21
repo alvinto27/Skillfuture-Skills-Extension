@@ -6,6 +6,7 @@
   const MODAL_ID = "skillsfuture-results-modal";
   const DEFAULT_BACKEND_URL = "http://localhost:8000/analyze-job";
   const MIN_DESCRIPTION_LENGTH = 100;
+  const MAX_JOB_DESCRIPTION_LENGTH = 12000;
 
   const JOB_DESCRIPTION_SELECTORS = [
     "section.description__text",
@@ -25,6 +26,12 @@
     ".jd-description",
     ".mcfe-job-description",
     ".job-post-description",
+    "[data-automation='jobDescription']",
+    "[data-testid='jobDescription']",
+    "[data-testid='job-description-container']",
+    ".jobAdDetails",
+    ".job-ad-details",
+    ".sx2jih0",
     "section[aria-label*='description' i]",
     "section[class*='description' i]",
     "div[class*='job-description' i]",
@@ -66,26 +73,130 @@
     return (element && (element.innerText || element.textContent) || "").replace(/\s+/g, " ").trim();
   }
 
+  function debugLog(message, details) {
+    if (!isDebugMode()) return;
+    console.debug(`[SkillsFuture] ${message}`, details || "");
+  }
+
+  function isDebugMode() {
+    return Boolean(
+      window.__skillsfuture_debug ||
+      window.location.protocol === "file:" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1"
+    );
+  }
+
+  function getSelectedText() {
+    const selectedText = String(window.getSelection && window.getSelection() || "").replace(/\s+/g, " ").trim();
+    if (selectedText.length >= MIN_DESCRIPTION_LENGTH) {
+      return selectedText;
+    }
+    return "";
+  }
+
+  function capJobDescription(text) {
+    return text.length > MAX_JOB_DESCRIPTION_LENGTH ? text.slice(0, MAX_JOB_DESCRIPTION_LENGTH) : text;
+  }
+
+  function getConfidenceLabel(score) {
+    if (typeof score !== "number") return "Unscored match";
+    if (score >= 0.6) return "High confidence";
+    if (score >= 0.4) return "Medium confidence";
+    return "Low confidence";
+  }
+
+  async function expandCollapsedDescriptions() {
+    const buttonPatterns = [
+      /show more/i,
+      /see more/i,
+      /read more/i,
+      /view more/i,
+      /more/i
+    ];
+    const buttons = Array.from(document.querySelectorAll("button, a"))
+      .filter((element) => {
+        const text = getText(element);
+        return text && buttonPatterns.some((pattern) => pattern.test(text));
+      })
+      .slice(0, 3);
+
+    for (const button of buttons) {
+      try {
+        button.click();
+        debugLog("Clicked expandable description control", getText(button));
+        await delay(250);
+      } catch (error) {
+        debugLog("Could not click expandable description control", error);
+      }
+    }
+  }
+
   function findJobDescriptionText() {
+    const selectedText = getSelectedText();
+    if (selectedText) {
+      debugLog("Using selected text", { chars: selectedText.length });
+      return {
+        text: capJobDescription(selectedText),
+        source: "selection",
+        originalLength: selectedText.length
+      };
+    }
+
     const candidates = [];
 
     for (const selector of JOB_DESCRIPTION_SELECTORS) {
       try {
-        candidates.push(...document.querySelectorAll(selector));
+        document.querySelectorAll(selector).forEach((element) => {
+          candidates.push({ selector, element });
+        });
       } catch (error) {
-        console.debug("SkillsFuture ignored selector", selector, error);
+        debugLog(`Ignored selector ${selector}`, error);
       }
     }
 
-    const best = uniqueElements(candidates)
-      .map((element) => ({ element, text: getText(element) }))
+    const seenElements = new Set();
+    const best = candidates
+      .filter((candidate) => {
+        if (!candidate.element || seenElements.has(candidate.element)) return false;
+        seenElements.add(candidate.element);
+        return true;
+      })
+      .map((candidate) => ({
+        selector: candidate.selector,
+        text: getText(candidate.element)
+      }))
       .filter((candidate) => candidate.text.length > MIN_DESCRIPTION_LENGTH)
       .sort((a, b) => b.text.length - a.text.length)[0];
 
-    if (best) return best.text;
+    if (best) {
+      debugLog("Using matched job-description selector", {
+        selector: best.selector,
+        chars: best.text.length
+      });
+      return {
+        text: capJobDescription(best.text),
+        source: best.selector,
+        originalLength: best.text.length
+      };
+    }
 
     const bodyText = getText(document.body);
-    return bodyText.length > MIN_DESCRIPTION_LENGTH ? bodyText : "";
+    if (bodyText.length > MIN_DESCRIPTION_LENGTH) {
+      debugLog("Using body text fallback", { chars: bodyText.length });
+      return {
+        text: capJobDescription(bodyText),
+        source: "body",
+        originalLength: bodyText.length
+      };
+    }
+
+    debugLog("No usable job description found");
+    return {
+      text: "",
+      source: "none",
+      originalLength: 0
+    };
   }
 
   async function getStoredBackendUrl() {
@@ -175,10 +286,14 @@
 
   async function onAnalyzeClicked() {
     const button = document.getElementById(BUTTON_ID);
-    const jobDescription = findJobDescriptionText();
+    await expandCollapsedDescriptions();
+    const extraction = findJobDescriptionText();
+    const jobDescription = extraction.text;
 
     if (!jobDescription) {
-      showModal({ error: "Could not locate a job description with enough text on this page." });
+      showModal({
+        error: "Could not locate a job description with enough text. Highlight the job description text on the page, then click Analyze again."
+      });
       return;
     }
 
@@ -190,11 +305,18 @@
       const result = await postWithRetry(backendUrl, payload, 1);
       const data = result.data;
       console.log("SkillsFuture analysis result:", data);
+      debugLog("Extraction diagnostics", {
+        source: extraction.source,
+        originalLength: extraction.originalLength,
+        sentLength: jobDescription.length
+      });
       window.__skillsfuture_last_request = payload;
       window.__skillsfuture_last_response = data;
-      document.documentElement.setAttribute("data-skillsfuture-last-request", JSON.stringify(payload));
-      document.documentElement.setAttribute("data-skillsfuture-last-response", JSON.stringify(data));
-      document.documentElement.setAttribute("data-skillsfuture-last-status", String(result.status));
+      if (isDebugMode()) {
+        document.documentElement.setAttribute("data-skillsfuture-last-request", JSON.stringify(payload));
+        document.documentElement.setAttribute("data-skillsfuture-last-response", JSON.stringify(data));
+        document.documentElement.setAttribute("data-skillsfuture-last-status", String(result.status));
+      }
       showModal({ data });
     } catch (error) {
       console.error("Failed to call SkillsFuture backend", error);
@@ -647,7 +769,7 @@
       if (typeof topMatch.similarity_score === "number") {
         const score = document.createElement("span");
         score.className = "score";
-        score.textContent = `${Math.round(topMatch.similarity_score * 100)}% match`;
+        score.textContent = `${getConfidenceLabel(topMatch.similarity_score)} - ${Math.round(topMatch.similarity_score * 100)}%`;
         meta.appendChild(score);
       }
       if (topMatch.is_emerging) {

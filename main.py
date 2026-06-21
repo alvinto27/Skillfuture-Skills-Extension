@@ -6,12 +6,17 @@ from sentence_transformers import SentenceTransformer
 from openai import OpenAI
 import os
 import json
+import hashlib
+import time
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- 1. SETUP & LOADING ---
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+MAX_JOB_DESCRIPTION_CHARS = int(os.getenv("MAX_JOB_DESCRIPTION_CHARS", "12000"))
+MAX_EXTRACTED_SKILLS = int(os.getenv("MAX_EXTRACTED_SKILLS", "8"))
+analysis_cache = {}
 
 print("Loading API, Database, and MiniLM Model... (This takes a few seconds)")
 app = FastAPI()
@@ -44,6 +49,15 @@ print("Server Ready!")
 class JobRequest(BaseModel):
     job_description: str
 
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "skills_loaded": int(len(df)),
+        "embedding_model": "all-MiniLM-L6-v2",
+        "cache_entries": len(analysis_cache),
+    }
+
 def get_cosine_similarity(vec1, vec_matrix):
     """Blazing fast vector math to find similar items"""
     dot_product = np.dot(vec_matrix, vec1)
@@ -54,9 +68,17 @@ def get_cosine_similarity(vec1, vec_matrix):
 # --- 3. THE MAGIC ENDPOINT ---
 @app.post("/analyze-job")
 async def analyze_job(request: JobRequest):
+    started_at = time.perf_counter()
     job_description = request.job_description.strip()
     if len(job_description) < 10:
         raise HTTPException(status_code=400, detail="job_description is too short")
+    if len(job_description) > MAX_JOB_DESCRIPTION_CHARS:
+        job_description = job_description[:MAX_JOB_DESCRIPTION_CHARS]
+
+    cache_key = hashlib.sha256(job_description.encode("utf-8")).hexdigest()
+    cached_response = analysis_cache.get(cache_key)
+    if cached_response:
+        return {**cached_response, "cached": True}
 
     # STEP 1: Extract raw skills from the text
     extract_prompt = f"""
@@ -85,10 +107,29 @@ async def analyze_job(request: JobRequest):
     if not isinstance(extracted_skills, list):
         raise HTTPException(status_code=502, detail="OpenAI response was not a skill array")
 
+    cleaned_skills = []
+    seen_skills = set()
+    for skill in extracted_skills:
+        if not isinstance(skill, str):
+            continue
+        cleaned_skill = skill.strip()
+        if not cleaned_skill:
+            continue
+        skill_key = cleaned_skill.casefold()
+        if skill_key in seen_skills:
+            continue
+        seen_skills.add(skill_key)
+        cleaned_skills.append(cleaned_skill)
+        if len(cleaned_skills) >= MAX_EXTRACTED_SKILLS:
+            break
+
+    if not cleaned_skills:
+        raise HTTPException(status_code=502, detail="No valid extracted skills returned")
+
     final_results = []
 
     # STEP 2: Vector Search locally against precomputed embeddings
-    for skill in extracted_skills:
+    for skill in cleaned_skills:
         # Embed the single extracted skill locally
         query_vec = embedding_model.encode(skill, normalize_embeddings=True)
         if query_vec.ndim > 1:
@@ -115,4 +156,11 @@ async def analyze_job(request: JobRequest):
             "top_matches": top_matches,
         })
 
-    return {"results": final_results}
+    response_payload = {
+        "results": final_results,
+        "cached": False,
+        "job_description_chars": len(job_description),
+        "processing_ms": round((time.perf_counter() - started_at) * 1000),
+    }
+    analysis_cache[cache_key] = response_payload
+    return response_payload
