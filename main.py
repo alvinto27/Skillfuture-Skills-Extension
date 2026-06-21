@@ -8,12 +8,15 @@ import os
 import json
 import hashlib
 import time
-from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- 1. SETUP & LOADING ---
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+try:
+    from config import OPENAI_API_KEY as CONFIG_OPENAI_API_KEY
+except ImportError:
+    CONFIG_OPENAI_API_KEY = ""
+
+client = OpenAI(api_key=CONFIG_OPENAI_API_KEY)
 MAX_JOB_DESCRIPTION_CHARS = int(os.getenv("MAX_JOB_DESCRIPTION_CHARS", "12000"))
 MAX_EXTRACTED_SKILLS = int(os.getenv("MAX_EXTRACTED_SKILLS", "8"))
 analysis_cache = {}
