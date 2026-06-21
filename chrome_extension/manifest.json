@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SkillsFuture Analyzer Hook",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Adds an Analyze with SkillsFuture button on job pages and sends the job text to your FastAPI backend.",
   "permissions": ["storage"],
   "host_permissions": [

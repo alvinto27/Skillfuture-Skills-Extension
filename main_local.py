@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 import json
 import re
+from typing import Any
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- 1. SETUP & LOADING ---
@@ -45,6 +46,7 @@ print("✅ Local API ready. Using open-source models for extraction and embeddin
 # --- 2. DATA MODELS ---
 class JobRequest(BaseModel):
     job_description: str
+    job_data: dict[str, Any] | None = None
 
 
 def get_cosine_similarity(vec1, vec_matrix):
@@ -54,11 +56,34 @@ def get_cosine_similarity(vec1, vec_matrix):
     return dot_product / (norm_vec1 * norm_matrix)
 
 
+def find_source_evidence(skill: str, job_description: str):
+    skill_words = [word.lower() for word in re.findall(r"[A-Za-z0-9+#.]+", skill) if len(word) > 2]
+    lines = [line.strip(" -\t") for line in job_description.splitlines() if line.strip()]
+
+    for line in lines:
+        lower_line = line.lower()
+        if skill.lower() in lower_line:
+            return line[:260]
+        if skill_words and all(word in lower_line for word in skill_words[:3]):
+            return line[:260]
+
+    for line in lines:
+        lower_line = line.lower()
+        if any(word in lower_line for word in skill_words):
+            return line[:260]
+
+    return ""
+
+
 def extract_skills_from_text(text: str):
     prompt = (
-        "Extract a list of the top 5 technical skills required from this job description. "
+        "Extract a list of the top 5 skills, tools, domain requirements, qualifications, "
+        "or experience requirements from this employer job listing text. Use only employer "
+        "responsibilities, requirements, qualifications, and required tools. Ignore profile "
+        "prompts, job-match widgets, navigation, footer text, and phrases like "
+        "'Tell employers what skills you have'. "
         "Return ONLY a JSON array of strings.\n\n"
-        "Job Description:\n"
+        "Employer job requirements:\n"
         f"{text}\n\n"
         "JSON:"
     )
@@ -110,7 +135,20 @@ async def analyze_job(request: JobRequest):
 
         final_results.append({
             "extracted_skill": skill,
+            "source_evidence": find_source_evidence(str(skill), request.job_description),
             "top_matches": top_matches,
         })
 
-    return {"results": final_results}
+    top_scores = [
+        result["top_matches"][0]["similarity_score"]
+        for result in final_results
+        if result["top_matches"]
+    ]
+
+    return {
+        "results": final_results,
+        "matched_skills": [result["extracted_skill"] for result in final_results],
+        "missing_skills": [],
+        "suitability_score": round(float(np.mean(top_scores)) * 100) if top_scores else 0,
+        "explanation": "Matched skills are based only on extracted employer responsibilities, requirements, qualifications, and required tools. No user profile skills were provided to calculate personal missing skills.",
+    }

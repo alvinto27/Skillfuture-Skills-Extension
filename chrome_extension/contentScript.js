@@ -6,7 +6,49 @@
   const MODAL_ID = "skillsfuture-results-modal";
   const DEFAULT_BACKEND_URL = "http://localhost:8000/analyze-job";
   const MIN_DESCRIPTION_LENGTH = 100;
+<<<<<<< Updated upstream
   const MAX_JOB_DESCRIPTION_LENGTH = 12000;
+=======
+  let watchedUrl = window.location.href;
+
+  const TARGET_JOB_HEADINGS = [
+    "key responsibilities",
+    "responsibilities",
+    "requirements",
+    "requirements & qualifications",
+    "requirements and qualifications",
+    "qualifications",
+    "job description",
+    "what you will be working on",
+    "what we are looking for",
+    "job requirements",
+    "about the role",
+    "skills required",
+    "skills required by the employer"
+  ];
+
+  const BLACKLIST_SECTION_PHRASES = [
+    "tell employers what skills you have",
+    "the more skills you have, the better your job match",
+    "your job match",
+    "add skills",
+    "skills you have"
+  ];
+
+  const NAVIGATION_FOOTER_PHRASES = [
+    "switch to employer",
+    "search jobs",
+    "gain insights",
+    "browse jobs",
+    "government agency website",
+    "how to identify",
+    "terms of use",
+    "privacy statement",
+    "contact us",
+    "report vulnerability",
+    "copyright"
+  ];
+>>>>>>> Stashed changes
 
   const JOB_DESCRIPTION_SELECTORS = [
     "section.description__text",
@@ -65,6 +107,22 @@
     document.body.appendChild(button);
   }
 
+  function setAnalyzeButtonVisible(isVisible) {
+    const button = document.getElementById(BUTTON_ID);
+    if (button) button.style.display = isVisible ? "" : "none";
+  }
+
+  function watchPageChanges() {
+    window.setInterval(() => {
+      if (window.location.href === watchedUrl) return;
+
+      watchedUrl = window.location.href;
+      document.getElementById(MODAL_ID)?.remove();
+      createButton();
+      setAnalyzeButtonVisible(true);
+    }, 750);
+  }
+
   function uniqueElements(elements) {
     return Array.from(new Set(elements)).filter(Boolean);
   }
@@ -73,6 +131,7 @@
     return (element && (element.innerText || element.textContent) || "").replace(/\s+/g, " ").trim();
   }
 
+<<<<<<< Updated upstream
   function debugLog(message, details) {
     if (!isDebugMode()) return;
     console.debug(`[SkillsFuture] ${message}`, details || "");
@@ -141,6 +200,277 @@
         source: "selection",
         originalLength: selectedText.length
       };
+=======
+  function getStructuredText(element) {
+    return (element && (element.innerText || element.textContent) || "").replace(/\r/g, "").trim();
+  }
+
+  function normalizeText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeHeading(text) {
+    return normalizeText(text).toLowerCase().replace(/[:-]+$/g, "").trim();
+  }
+
+  function includesBlacklistedText(text) {
+    const normalized = normalizeText(text).toLowerCase();
+    return BLACKLIST_SECTION_PHRASES.some((phrase) => normalized.includes(phrase));
+  }
+
+  function isNavigationOrFooterText(text) {
+    const normalized = normalizeText(text).toLowerCase();
+    return NAVIGATION_FOOTER_PHRASES.some((phrase) => normalized.includes(phrase));
+  }
+
+  function isMyCareersFutureJobPage() {
+    const host = window.location.hostname.toLowerCase();
+    return host.includes("mycareersfuture.gov.sg") && /\/job\//i.test(window.location.pathname);
+  }
+
+  function isVisibleElement(element) {
+    if (!element || !(element instanceof Element)) return false;
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  }
+
+  function isTargetHeadingText(text) {
+    const heading = normalizeHeading(text);
+    if (!heading || heading.length > 90) return false;
+    return TARGET_JOB_HEADINGS.some((target) => heading === target || heading.startsWith(`${target} `));
+  }
+
+  function isMajorHeadingElement(element) {
+    if (!element || !(element instanceof Element)) return false;
+    if (/^H[1-6]$/i.test(element.tagName)) return true;
+    if (element.getAttribute("role") === "heading") return true;
+
+    const text = getText(element);
+    if (isTargetHeadingText(text)) return true;
+
+    const childText = Array.from(element.children || []).map((child) => getText(child)).join(" ");
+    return text.length > 0 && text.length <= 90 && text !== childText && /^[A-Z0-9][A-Za-z0-9 &/(),-]+$/.test(text);
+  }
+
+  function findHeadingElements(root) {
+    const headings = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(node) {
+        if (!isVisibleElement(node)) return NodeFilter.FILTER_SKIP;
+        const text = getText(node);
+        if (isTargetHeadingText(text)) return NodeFilter.FILTER_ACCEPT;
+        return NodeFilter.FILTER_SKIP;
+      }
+    });
+
+    while (walker.nextNode()) {
+      const element = walker.currentNode;
+      if (!headings.some((heading) => heading.contains(element))) {
+        headings.push(element);
+      }
+    }
+
+    return headings;
+  }
+
+  function cleanExtractedText(text) {
+    const seen = new Set();
+    return String(text || "")
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .filter((line) => !includesBlacklistedText(line))
+      .filter((line) => !isNavigationOrFooterText(line))
+      .filter((line) => {
+        const key = line.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .join("\n");
+  }
+
+  function collectSectionAfterHeading(heading) {
+    const lines = [];
+    let ignoredReason = "";
+    let current = heading.nextElementSibling;
+
+    while (current) {
+      const text = getStructuredText(current);
+      if (current !== heading && isMajorHeadingElement(current) && text.length <= 120) break;
+      if (includesBlacklistedText(text)) {
+        ignoredReason = `blacklisted section text: ${normalizeText(text).slice(0, 80)}`;
+        break;
+      }
+      if (text && !isNavigationOrFooterText(text)) lines.push(text);
+      current = current.nextElementSibling;
+    }
+
+    if (!lines.length) {
+      const parentText = getStructuredText(heading.parentElement);
+      const headingText = getStructuredText(heading);
+      const textWithoutHeading = parentText.replace(headingText, "").trim();
+      if (textWithoutHeading && !includesBlacklistedText(textWithoutHeading) && !isNavigationOrFooterText(textWithoutHeading)) {
+        lines.push(textWithoutHeading);
+      }
+    }
+
+    if (!lines.length) {
+      let parentSibling = heading.parentElement && heading.parentElement.nextElementSibling;
+      while (parentSibling) {
+        const text = getStructuredText(parentSibling);
+        if (isMajorHeadingElement(parentSibling) && text.length <= 120) break;
+        if (includesBlacklistedText(text)) {
+          ignoredReason = `blacklisted sibling section: ${normalizeText(text).slice(0, 80)}`;
+          break;
+        }
+        if (text && !isNavigationOrFooterText(text)) lines.push(text);
+        parentSibling = parentSibling.nextElementSibling;
+      }
+    }
+
+    const text = cleanExtractedText(lines.join("\n"));
+    return { text, ignoredReason };
+  }
+
+  function extractPageTitle() {
+    const titleCandidates = [
+      "h1",
+      "[data-testid*='job-title' i]",
+      "[class*='job-title' i]",
+      "[class*='title' i]"
+    ];
+
+    for (const selector of titleCandidates) {
+      const text = getText(document.querySelector(selector));
+      if (text && text.length <= 120 && !isNavigationOrFooterText(text)) return text;
+    }
+
+    return normalizeText(document.title.split("|")[0] || document.title);
+  }
+
+  function extractCompanyName() {
+    const companyCandidates = [
+      "[data-testid*='company' i]",
+      "[class*='company' i]",
+      "a[href*='/companies/']",
+      "a[href*='/company/']"
+    ];
+
+    for (const selector of companyCandidates) {
+      const text = getText(document.querySelector(selector));
+      if (text && text.length <= 140 && !isNavigationOrFooterText(text)) return text;
+    }
+
+    return "";
+  }
+
+  function extractPatternMatches(text, patterns) {
+    const matches = [];
+    patterns.forEach((pattern) => {
+      const found = text.match(pattern);
+      if (found) matches.push(normalizeText(found[0]));
+    });
+    return Array.from(new Set(matches));
+  }
+
+  function validateExtractedJobData(jobData) {
+    const requiredText = normalizeText(Object.values(jobData.sections || {}).join(" "));
+    const blacklistHits = BLACKLIST_SECTION_PHRASES.filter((phrase) => requiredText.toLowerCase().includes(phrase));
+    const hasTargetSection = Object.keys(jobData.sections || {}).some((heading) => (
+      /responsibilities|requirements|qualifications|description|working on|looking for|about the role/i.test(heading)
+    ));
+
+    if (!requiredText || requiredText.length < MIN_DESCRIPTION_LENGTH) {
+      return "Could not find enough employer-provided job requirement text on this MyCareersFuture page.";
+    }
+
+    if (blacklistHits.length && requiredText.length < blacklistHits.join(" ").length * 4) {
+      return "Extraction mostly matched MyCareersFuture profile/skill suggestion text, so it was rejected.";
+    }
+
+    if (!hasTargetSection) {
+      return "Could not find responsibilities, requirements, qualifications, or job description sections. Analysis stopped to avoid using the wrong page text.";
+    }
+
+    return "";
+  }
+
+  function buildJobDescriptionFromData(jobData) {
+    const parts = [];
+    if (jobData.title) parts.push(`Job title: ${jobData.title}`);
+    if (jobData.company) parts.push(`Company: ${jobData.company}`);
+
+    Object.entries(jobData.sections || {}).forEach(([heading, text]) => {
+      if (text) parts.push(`${heading}\n${text}`);
+    });
+
+    if (jobData.requiredSkills.length) parts.push(`Required skills/tools\n${jobData.requiredSkills.join("\n")}`);
+    if (jobData.yearsOfExperience.length) parts.push(`Years of experience\n${jobData.yearsOfExperience.join("\n")}`);
+    if (jobData.educationRequirements.length) parts.push(`Education requirements\n${jobData.educationRequirements.join("\n")}`);
+
+    return parts.join("\n\n");
+  }
+
+  function extractMyCareersFutureJobData() {
+    const root = document.querySelector("main") || document.querySelector("[role='main']") || document.body;
+    const headings = findHeadingElements(root);
+    const sections = {};
+    const ignoredSections = [];
+
+    headings.forEach((heading) => {
+      const headingText = normalizeText(getText(heading)).replace(/[:-]+$/g, "");
+      const { text, ignoredReason } = collectSectionAfterHeading(heading);
+
+      if (ignoredReason) ignoredSections.push({ heading: headingText, reason: ignoredReason });
+      if (!text || includesBlacklistedText(text)) {
+        if (text) ignoredSections.push({ heading: headingText, reason: "blacklisted extracted text" });
+        return;
+      }
+
+      sections[headingText] = text;
+    });
+
+    const combinedText = Object.values(sections).join("\n");
+    const jobData = {
+      source: "mycareersfuture-heading-extraction",
+      url: window.location.href,
+      title: extractPageTitle(),
+      company: extractCompanyName(),
+      headingsFound: headings.map((heading) => normalizeText(getText(heading))),
+      ignoredSections,
+      sections,
+      requiredSkills: extractPatternMatches(combinedText, [
+        /\b(?:Autodesk Revit|Revit|AutoCAD|CORENET X|Singapore Fire Code|Python|SQL|JavaScript|React|AWS|Azure|Docker|Kubernetes|Excel|Power BI|Tableau)\b/gi
+      ]),
+      yearsOfExperience: extractPatternMatches(combinedText, [
+        /\b\d+\s*(?:to|-)\s*\d+\s+years?(?:\s+of)?(?:\s+[a-z-]+){0,8}\s+experience\b/gi,
+        /\b(?:at least|minimum|min\.?)\s+\d+\s+years?(?:\s+of)?(?:\s+[a-z-]+){0,8}\s+experience\b/gi,
+        /\b\d+\+?\s+years?(?:\s+of)?(?:\s+[a-z-]+){0,8}\s+experience\b/gi
+      ]),
+      educationRequirements: extractPatternMatches(combinedText, [
+        /\b(?:degree|diploma|ite|nitec|higher nitec|bachelor'?s?|master'?s?|phd)\b(?:\s+[A-Za-z/&-]+){0,12}/gi
+      ])
+    };
+
+    const validationError = validateExtractedJobData(jobData);
+    const jobDescription = validationError ? "" : buildJobDescriptionFromData(jobData);
+
+    console.debug("SkillsFuture extraction headings found", jobData.headingsFound);
+    console.debug("SkillsFuture extraction ignored sections", jobData.ignoredSections);
+    console.debug("SkillsFuture final extracted job data", jobData);
+
+    window.__skillsfuture_last_extracted_job_data = jobData;
+    document.documentElement.setAttribute("data-skillsfuture-last-extracted-job", JSON.stringify(jobData));
+
+    return { jobDescription, jobData, validationError };
+  }
+
+  function findJobDescriptionText() {
+    if (isMyCareersFutureJobPage()) {
+      return extractMyCareersFutureJobData();
+>>>>>>> Stashed changes
     }
 
     const candidates = [];
@@ -169,6 +499,7 @@
       .filter((candidate) => candidate.text.length > MIN_DESCRIPTION_LENGTH)
       .sort((a, b) => b.text.length - a.text.length)[0];
 
+<<<<<<< Updated upstream
     if (best) {
       debugLog("Using matched job-description selector", {
         selector: best.selector,
@@ -196,6 +527,15 @@
       text: "",
       source: "none",
       originalLength: 0
+=======
+    if (best) return { jobDescription: best.text, jobData: null, validationError: "" };
+
+    const bodyText = getText(document.body);
+    return {
+      jobDescription: bodyText.length > MIN_DESCRIPTION_LENGTH ? bodyText : "",
+      jobData: null,
+      validationError: ""
+>>>>>>> Stashed changes
     };
   }
 
@@ -286,6 +626,7 @@
 
   async function onAnalyzeClicked() {
     const button = document.getElementById(BUTTON_ID);
+<<<<<<< Updated upstream
     await expandCollapsedDescriptions();
     const extraction = findJobDescriptionText();
     const jobDescription = extraction.text;
@@ -294,10 +635,25 @@
       showModal({
         error: "Could not locate a job description with enough text. Highlight the job description text on the page, then click Analyze again."
       });
+=======
+    const extraction = findJobDescriptionText();
+    const jobDescription = extraction.jobDescription;
+
+    if (extraction.validationError) {
+      showModal({ error: extraction.validationError });
+>>>>>>> Stashed changes
       return;
     }
 
-    const payload = { job_description: jobDescription };
+    if (!jobDescription || includesBlacklistedText(jobDescription)) {
+      showModal({ error: "Could not safely extract employer job requirements from this page. Analysis stopped to avoid using MyCareersFuture profile suggestion text." });
+      return;
+    }
+
+    const payload = {
+      job_description: jobDescription,
+      job_data: extraction.jobData || undefined
+    };
     const backendUrl = await getStoredBackendUrl();
 
     try {
@@ -538,22 +894,50 @@
           font-size: 12px;
           line-height: 1.35;
         }
-        .close-button {
+        .minimize-button,
+        .restore-button {
           flex: 0 0 auto;
-          width: 34px;
-          height: 34px;
           border: 0;
           border-radius: 6px;
           background: #f1f5f9;
           color: #334155;
           cursor: pointer;
-          font-size: 22px;
-          line-height: 32px;
         }
-        .close-button:hover {
+        .minimize-button {
+          min-width: 54px;
+          height: 34px;
+          font: 700 12px/1 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+          padding: 0 12px;
+        }
+        .restore-button {
+          position: fixed;
+          right: 20px;
+          bottom: 72px;
+          display: none;
+          align-items: center;
+          gap: 8px;
+          pointer-events: auto;
+          background: #075985;
+          color: #ffffff;
+          box-shadow: 0 8px 22px rgba(15, 23, 42, 0.22);
+          font: 700 13px/1.2 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+          padding: 11px 14px;
+        }
+        .restore-button::before {
+          content: "";
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          background: #bae6fd;
+          box-shadow: 0 0 0 3px rgba(186, 230, 253, 0.24);
+        }
+        .minimize-button:hover {
           background: #e2e8f0;
           color: #0f172a;
         }
+        .restore-button:hover { background: #0369a1; }
+        :host(.is-minimized) .panel { display: none; }
+        :host(.is-minimized) .restore-button { display: inline-flex; }
         .body {
           flex: 1 1 auto;
           overflow: auto;
@@ -567,6 +951,20 @@
           border-radius: 8px;
           padding: 12px;
         }
+        .summary-panel {
+          margin: 0 0 14px;
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          padding: 12px 14px;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+        }
+        .summary-panel p {
+          margin: 0;
+          color: #475569;
+          font-size: 13px;
+        }
+        .summary-panel strong { color: #0f172a; }
         .skill {
           margin: 0 0 14px;
           overflow: hidden;
@@ -624,6 +1022,14 @@
           line-height: 1.45;
         }
         .definition strong { color: #0f172a; }
+        .evidence {
+          margin: 0;
+          padding: 0 14px 13px;
+          color: #475569;
+          font-size: 12px;
+          line-height: 1.45;
+        }
+        .evidence strong { color: #0f172a; }
         .meta {
           display: flex;
           flex-wrap: wrap;
@@ -681,6 +1087,11 @@
         .secondary-matches li { margin: 5px 0; }
         @media (max-width: 520px) {
           .panel { width: 100vw; }
+          .restore-button {
+            right: 14px;
+            bottom: 72px;
+            max-width: calc(100vw - 28px);
+          }
           .mapping { grid-template-columns: 1fr; }
           .arrow {
             min-height: 34px;
@@ -697,15 +1108,24 @@
             <h2>SkillsFuture Analysis</h2>
             <p class="subtitle">Extracted job skills mapped to official SkillsFuture skills.</p>
           </div>
-          <button class="close-button" type="button" aria-label="Close">&times;</button>
+          <button class="minimize-button" type="button" aria-label="Minimize SkillsFuture results" title="Minimize">Hide</button>
         </div>
         <div class="body"></div>
       </section>
+      <button class="restore-button" type="button" aria-label="Show SkillsFuture results">Show analysis</button>
     `;
 
     const body = shadow.querySelector(".body");
-    const closeButton = shadow.querySelector(".close-button");
-    closeButton.addEventListener("click", () => host.remove());
+    const minimizeButton = shadow.querySelector(".minimize-button");
+    const restoreButton = shadow.querySelector(".restore-button");
+    minimizeButton.addEventListener("click", () => {
+      host.classList.add("is-minimized");
+    });
+    restoreButton.addEventListener("click", () => {
+      host.classList.remove("is-minimized");
+    });
+
+    const hasResults = !error && Array.isArray(data && data.results) && data.results.length > 0;
 
     if (error) {
       const paragraph = document.createElement("p");
@@ -717,6 +1137,7 @@
     }
 
     document.body.appendChild(host);
+    setAnalyzeButtonVisible(!hasResults);
   }
 
   function renderResults(container, data) {
@@ -727,6 +1148,23 @@
       empty.textContent = "The backend returned no skill matches.";
       container.appendChild(empty);
       return;
+    }
+
+    if (typeof data.suitability_score === "number" || data.explanation) {
+      const summary = document.createElement("section");
+      summary.className = "summary-panel";
+      const text = document.createElement("p");
+      const score = typeof data.suitability_score === "number"
+        ? `${data.suitability_score}%`
+        : "Not calculated";
+      text.innerHTML = `<strong>Suitability score:</strong> ${score}`;
+      summary.appendChild(text);
+      if (data.explanation) {
+        const explanation = document.createElement("p");
+        explanation.textContent = data.explanation;
+        summary.appendChild(explanation);
+      }
+      container.appendChild(summary);
     }
 
     results.slice(0, 5).forEach((result) => {
@@ -790,6 +1228,15 @@
       definition.append(strong, topMatch.official_skill_description || "No official definition returned.");
       section.appendChild(definition);
 
+      if (result.source_evidence) {
+        const evidence = document.createElement("p");
+        evidence.className = "evidence";
+        const evidenceLabel = document.createElement("strong");
+        evidenceLabel.textContent = "Matched because: ";
+        evidence.append(evidenceLabel, result.source_evidence);
+        section.appendChild(evidence);
+      }
+
       const secondaryMatches = matches.slice(1, 3);
       if (secondaryMatches.length) {
         const details = document.createElement("details");
@@ -828,5 +1275,8 @@
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  onReady(createButton);
+  onReady(() => {
+    createButton();
+    watchPageChanges();
+  });
 }());

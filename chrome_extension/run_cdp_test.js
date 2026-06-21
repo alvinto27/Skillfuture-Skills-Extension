@@ -188,6 +188,36 @@ async function main() {
     throw new Error("Results modal did not display expected skills");
   }
 
+  const minimizeCheck = await client.send("Runtime.evaluate", {
+    expression: `(() => {
+      const modal = document.getElementById('skillsfuture-results-modal');
+      const root = modal && modal.shadowRoot;
+      const minimize = root && root.querySelector('.minimize-button');
+      minimize && minimize.click();
+      const minimized = modal && modal.classList.contains('is-minimized');
+      const restore = root && root.querySelector('.restore-button');
+      restore && restore.click();
+      return {
+        minimized,
+        restored: modal && !modal.classList.contains('is-minimized'),
+        stillHasResults: Boolean(root && root.querySelector('.body')?.textContent.includes('Official SkillsFuture match')),
+        analyzeButtonHidden: document.getElementById('skillsfuture-analyze-btn')?.style.display === 'none',
+        restoreText: root && root.querySelector('.restore-button')?.textContent
+      };
+    })()`,
+    returnByValue: true
+  });
+
+  if (
+    !minimizeCheck.result.value.minimized ||
+    !minimizeCheck.result.value.restored ||
+    !minimizeCheck.result.value.stillHasResults ||
+    !minimizeCheck.result.value.analyzeButtonHidden ||
+    minimizeCheck.result.value.restoreText !== "Show analysis"
+  ) {
+    throw new Error("Results panel did not minimize and restore while keeping the analysis results");
+  }
+
   const summary = {
     status: "passed",
     network_request: {
@@ -198,6 +228,7 @@ async function main() {
     result_count: apiResponse.results.length,
     top_extracted_skills: apiResponse.results.slice(0, 5).map((result) => result.extracted_skill),
     modal_contains_results: true,
+    modal_minimize_restore: true,
     modal_preview: response.result.value.text.replace(/\s+/g, " ").trim().slice(0, 240),
     console_logged_result: consoleLogs.some((entry) => entry.args.join(" ").includes("SkillsFuture analysis result"))
   };
