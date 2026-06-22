@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkillsFuture Career Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f6f8;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --line-soft: #e8ebf0;
+      --text: #111827;
+      --muted: #5b6472;
+      --soft: #f9fafb;
+      --accent: #0f766e;
+      --accent-soft: #f0fdfa;
+      --green: #166534;
+      --green-bg: #dcfce7;
+      --yellow: #92400e;
+      --yellow-bg: #fef3c7;
+      --red: #991b1b;
+      --red-bg: #fee2e2;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    .topbar {
+      background: var(--panel);
+      border-top: 4px solid var(--accent);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 18px 24px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .subhead {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: #374151;
+      cursor: pointer;
+      font-weight: 650;
+      padding: 0 12px;
+    }
+
+    .button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    .button:hover {
+      background: #f3f4f6;
+    }
+
+    .button.primary:hover {
+      background: #115e59;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 22px 24px 36px;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    label {
+      display: block;
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    select {
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.25;
+      font-weight: 750;
+    }
+
+    .panel-note {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .panel-body {
+      padding: 14px 16px 16px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      background: var(--soft);
+      padding: 12px;
+    }
+
+    .metric-value {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.1;
+      font-weight: 780;
+    }
+
+    .metric-label {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .route {
+      display: grid;
+      gap: 10px;
+    }
+
+    .route-step {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+
+    .route-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .route-copy {
+      border-bottom: 1px solid var(--line-soft);
+      padding-bottom: 12px;
+    }
+
+    .route-step:last-child .route-copy {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .route-copy h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .route-copy p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .skill-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .skill-card {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .skill-main {
+      padding: 13px 14px;
+    }
+
+    .skill-name {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 760;
+      line-height: 1.3;
+    }
+
+    .match-name {
+      margin: 8px 0 0;
+      color: #1f2937;
+      font-weight: 650;
+      line-height: 1.35;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 9px;
+    }
+
+    .score {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: #f3f4f6;
+      color: #374151;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      padding: 5px 8px;
+    }
+
+    .score.high {
+      background: var(--green-bg);
+      color: var(--green);
+    }
+
+    .score.medium {
+      background: var(--yellow-bg);
+      color: var(--yellow);
+    }
+
+    .score.low {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+
+    .skill-detail {
+      margin: 0;
+      padding: 11px 14px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .skill-detail strong {
+      color: var(--text);
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--soft);
+      color: #374151;
+      font-size: 12px;
+      font-weight: 650;
+      padding: 6px 9px;
+    }
+
+    .empty {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 18px;
+    }
+
+    .empty h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .empty p {
+      margin: 8px 0 0;
+      color: var(--muted);
+    }
+
+    @media (max-width: 840px) {
+      .topbar-inner,
+      .toolbar {
+        display: block;
+      }
+
+      .actions {
+        margin-top: 12px;
+      }
+
+      .toolbar > .actions {
+        margin-top: 10px;
+      }
+
+      .grid,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div>
+        <h1>Career Dashboard</h1>
+        <p class="subhead">Review analyzed jobs and plan the next skills to build.</p>
+      </div>
+      <div class="actions">
+        <button class="button" id="refresh" type="button">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="toolbar" id="toolbar" hidden>
+      <div>
+        <label for="jobSelect">Analyzed job</label>
+        <select id="jobSelect"></select>
+      </div>
+      <div class="actions">
+        <button class="button primary" id="openJob" type="button">Open job page</button>
+      </div>
+    </section>
+
+    <section id="emptyState" class="empty" hidden>
+      <h2>No analysis history yet</h2>
+      <p>Analyze a job from the extension first. The dashboard will then show the saved skills, matches, and career route.</p>
+    </section>
+
+    <section class="grid" id="dashboard" hidden>
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Overview</h2>
+            <p class="panel-note" id="jobMeta"></p>
+          </div>
+          <div class="panel-body">
+            <div class="metrics">
+              <div class="metric">
+                <p class="metric-value" id="scoreMetric">-</p>
+                <p class="metric-label">Overall fit</p>
+              </div>
+              <div class="metric">
+                <p class="metric-value" id="skillMetric">-</p>
+                <p class="metric-label">Skills found</p>
+              </div>
+              <div class="metric">
+                <p class="metric-value" id="historyMetric">-</p>
+                <p class="metric-label">Jobs analyzed</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Career Route</h2>
+            <p class="panel-note">A simple path based on your analyzed job skills.</p>
+          </div>
+          <div class="panel-body">
+            <div class="route" id="careerRoute"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Skills To Focus On</h2>
+            <p class="panel-note">Lower-confidence matches are useful places to check or improve.</p>
+          </div>
+          <div class="panel-body">
+            <ul class="chips" id="focusSkills"></ul>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Analysis Results</h2>
+          <p class="panel-note">The same saved analysis shown in the extension, expanded for review.</p>
+        </div>
+        <div class="panel-body">
+          <div class="skill-list" id="skillList"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
