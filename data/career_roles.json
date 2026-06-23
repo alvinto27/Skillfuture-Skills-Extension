@@ -1,0 +1,35 @@
+[
+  {
+    "title": "Data Analyst",
+    "sector": "Information and Communications",
+    "description": "Initial local taxonomy role for analysing business data and creating reports. This is not an official SSG role taxonomy.",
+    "skills": [
+      {"canonical_name": "SQL", "aliases": ["Structured Query Language"], "required_level": 3, "importance_weight": 1.0},
+      {"canonical_name": "Python", "aliases": ["Python programming"], "required_level": 2, "importance_weight": 0.8},
+      {"canonical_name": "Data Visualization", "aliases": ["dashboarding", "visualisation"], "required_level": 3, "importance_weight": 0.9},
+      {"canonical_name": "Data Analysis", "aliases": ["analytics"], "required_level": 3, "importance_weight": 1.0}
+    ]
+  },
+  {
+    "title": "Data Engineer",
+    "sector": "Information and Communications",
+    "description": "Initial local taxonomy role for building data pipelines and data platforms. This is not an official SSG role taxonomy.",
+    "skills": [
+      {"canonical_name": "Python", "aliases": ["Python programming"], "required_level": 3, "importance_weight": 1.0},
+      {"canonical_name": "SQL", "aliases": ["Structured Query Language"], "required_level": 3, "importance_weight": 0.9},
+      {"canonical_name": "Data Engineering", "aliases": ["data pipelines", "ETL"], "required_level": 3, "importance_weight": 1.0},
+      {"canonical_name": "Cloud Computing", "aliases": ["cloud deployment", "AWS", "Azure", "GCP"], "required_level": 2, "importance_weight": 0.7}
+    ]
+  },
+  {
+    "title": "Software Engineer",
+    "sector": "Information and Communications",
+    "description": "Initial local taxonomy role for designing and implementing software systems. This is not an official SSG role taxonomy.",
+    "skills": [
+      {"canonical_name": "Programming and Coding", "aliases": ["coding", "software development"], "required_level": 3, "importance_weight": 1.0},
+      {"canonical_name": "API Development", "aliases": ["REST API", "API integration"], "required_level": 3, "importance_weight": 0.8},
+      {"canonical_name": "Cloud Computing", "aliases": ["cloud deployment"], "required_level": 2, "importance_weight": 0.7},
+      {"canonical_name": "Software Testing", "aliases": ["testing", "test automation"], "required_level": 2, "importance_weight": 0.7}
+    ]
+  }
+]

@@ -1,3 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+# Virtual environments and local secrets
 venv/
+.venv/
 .env
+.env.*
+!.env.example
 config.py
+
+# Generated application data
+*.sqlite3
+data/raw/
+course_embeddings.npz
+
+# Generated extension validation output
+Skillfuture-Skills-Extension/chrome_extension/*validation_log.json
+
+# OS and editor files
+.DS_Store
+Thumbs.db

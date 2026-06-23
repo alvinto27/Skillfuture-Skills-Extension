@@ -1,7 +1,9 @@
 const fs = require("fs");
+const path = require("path");
 
 const DEBUG_URL = "http://127.0.0.1:9222";
 const TEST_URL = "http://127.0.0.1:8765/test_page.html";
+const VALIDATION_LOG = path.join(__dirname, "extension_validation_log.json");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -233,7 +235,7 @@ async function main() {
     console_logged_result: consoleLogs.some((entry) => entry.args.join(" ").includes("SkillsFuture analysis result"))
   };
 
-  fs.writeFileSync("chrome_extension/extension_validation_log.json", JSON.stringify(summary, null, 2));
+  fs.writeFileSync(VALIDATION_LOG, JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));
   client.close();
 }

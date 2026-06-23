@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SkillsFuture Analyzer Hook",
-  "version": "0.3.6",
-  "description": "Adds an Analyze with SkillsFuture button on job pages and sends the job text to your FastAPI backend.",
+  "version": "0.5.0",
+  "description": "Analyzes job skills and provides semantic SkillsFuture course recommendations and credit planning.",
   "permissions": ["storage"],
   "host_permissions": [
     "http://localhost:8000/*",
@@ -21,6 +21,9 @@
         "https://www.mycareersfuture.gov.sg/*",
         "https://mycareersfuture.gov.sg/*",
         "https://*.mycareersfuture.gov.sg/*",
+        "https://www.jobstreet.com.sg/*",
+        "https://sg.jobstreet.com/*",
+        "https://*.jobstreet.com.sg/*",
         "http://localhost/*",
         "http://127.0.0.1/*",
         "file:///*"
@@ -35,6 +38,9 @@
         "https://www.mycareersfuture.gov.sg/*",
         "https://mycareersfuture.gov.sg/*",
         "https://*.mycareersfuture.gov.sg/*",
+        "https://www.jobstreet.com.sg/*",
+        "https://sg.jobstreet.com/*",
+        "https://*.jobstreet.com.sg/*",
         "http://localhost/*",
         "http://127.0.0.1/*",
         "file:///*"

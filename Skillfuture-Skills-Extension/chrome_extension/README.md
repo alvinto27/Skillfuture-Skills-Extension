@@ -48,6 +48,17 @@ The content script checks `window.__skillsfuture_backend_url` first, then Chrome
 4. Confirm the modal displays extracted skills and top official matches.
 5. Open DevTools console to inspect `window.__skillsfuture_last_request` and `window.__skillsfuture_last_response`.
 
+## Course planner dashboard
+
+1. Start FastAPI so the local course catalogue is available.
+2. Analyze a job and select **Dashboard** in the results panel, or open `dashboard.html` from the extension URL.
+3. Enter the user's currently available SkillsFuture Credit balance.
+4. Review semantic course recommendations generated from the selected job's matched skills.
+5. Search semantically for additional courses and select **Add to plan**.
+6. Set each course's status, target start date, and requested credit amount.
+
+The dashboard stores the plan in Chrome local storage. Fee and credit figures are estimates based on the imported local course dataset and are not an official eligibility or balance check.
+
 ## Supported pages
 
 The content script is restricted to LinkedIn Jobs, MyCareersFuture job pages, localhost/127.0.0.1 pages for automated testing, and local file URLs for manual testing.

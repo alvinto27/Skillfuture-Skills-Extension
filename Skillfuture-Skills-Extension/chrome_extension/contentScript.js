@@ -895,7 +895,8 @@
 
     const payload = {
       job_description: jobDescription,
-      job_data: extraction.jobData || undefined
+      job_data: extraction.jobData || undefined,
+      include_rag: true
     };
     const backendUrl = await getStoredBackendUrl();
     showModal({ loading: true });
@@ -1845,7 +1846,9 @@
       const score = typeof data.suitability_score === "number"
         ? `${data.suitability_score}%`
         : "Not calculated";
-      text.innerHTML = `<strong>Overall fit:</strong> ${score}`;
+      const fitLabel = document.createElement("strong");
+      fitLabel.textContent = "Overall fit: ";
+      text.append(fitLabel, score);
       summary.appendChild(text);
       if (data.explanation) {
         const explanation = document.createElement("p");
@@ -1853,6 +1856,32 @@
         summary.appendChild(explanation);
       }
       container.appendChild(summary);
+    }
+
+    if (data.rag_recommendation) {
+      const rag = document.createElement("section");
+      rag.className = "summary-panel";
+
+      const heading = document.createElement("p");
+      const headingLabel = document.createElement("strong");
+      headingLabel.textContent = "RAG recommendation: ";
+      heading.append(headingLabel, data.rag_recommendation.summary || "Grounded recommendations from retrieved SkillsFuture matches.");
+      rag.appendChild(heading);
+
+      const priorities = Array.isArray(data.rag_recommendation.priority_skills)
+        ? data.rag_recommendation.priority_skills.slice(0, 5)
+        : [];
+
+      priorities.forEach((priority) => {
+        const item = document.createElement("p");
+        const title = document.createElement("strong");
+        title.textContent = `${priority.learning_priority || "Priority"} - ${priority.job_skill || "Skill"}: `;
+        item.append(title, priority.why_it_matched || priority.next_step || "");
+        if (priority.next_step) item.append(` Next step: ${priority.next_step}`);
+        rag.appendChild(item);
+      });
+
+      container.appendChild(rag);
     }
 
     results.slice(0, 5).forEach((result) => {
@@ -1895,7 +1924,7 @@
       if (typeof topMatch.similarity_score === "number") {
         const score = document.createElement("span");
         score.className = getScoreClass(topMatch.similarity_score);
-        score.textContent = `${getConfidenceLabel(topMatch.similarity_score)} - ${Math.round(topMatch.similarity_score * 100)}%`;
+        score.textContent = `${topMatch.confidence_label || getConfidenceLabel(topMatch.similarity_score)} - ${Math.round(topMatch.similarity_score * 100)}%`;
         meta.appendChild(score);
       }
       if (topMatch.is_emerging) {
