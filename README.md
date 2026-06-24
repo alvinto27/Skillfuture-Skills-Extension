@@ -2,6 +2,10 @@
 
 A local FastAPI backend plus a browser extension for extracting skills from job descriptions, matching them to SkillsFuture skill data, and planning course pathways.
 
+## Project Demo Video
+This is the link to the Demo Video:
+https://youtu.be/6mezVTgYD2o
+
 ## Overview
 
 - Backend: `main.py` runs a FastAPI app

@@ -80,6 +80,27 @@
       "[role='main'] [data-testid*='job' i]",
       "[role='main'] [class*='job' i]"
     ],
+    linkedIn: [
+      "section.description__text",
+      ".description__text",
+      "div.description__text",
+      ".show-more-less-html__markup",
+      "div.show-more-less-html__markup",
+      "div.show-more-less-html__markup span",
+      ".show-more-less-text__text--more",
+      ".jobs-description__content",
+      "div.jobs-description__content",
+      ".jobs-box__html-content",
+      ".jobs-unified-description__text",
+      "div.jobs-unified-description__text",
+      "div.jobs-unified-description__text > span",
+      "div.jobs-unified-description__text > p",
+      ".jobs-unified-description__content",
+      ".jobs-description-content__text",
+      "#job-details",
+      "section[aria-label*='job description' i]",
+      "section[aria-label*='description' i]"
+    ],
     jobStreet: [
       "div[class*='job-description' i]",
       "div[class*='job-desc' i]",
@@ -281,6 +302,41 @@
     return normalizeText(text).toLowerCase().replace(/[:-]+$/g, "").trim();
   }
 
+  async function runFetch(url, options) {
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+      try {
+        const response = await new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            {
+              action: "skillsfutureBackendFetch",
+              url,
+              options,
+            },
+            (result) => resolve(result)
+          );
+        });
+
+        if (response && response.ok) {
+          return new Response(JSON.stringify(response.data), {
+            status: response.status,
+            statusText: response.statusText || "",
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        if (response && response.error) {
+          const error = new Error(response.error);
+          error.status = response.status;
+          throw error;
+        }
+      } catch (error) {
+        debugLog("Background fetch failed, falling back to page fetch", error);
+      }
+    }
+
+    return fetch(url, options);
+  }
+
   function includesBlacklistedText(text) {
     const normalized = normalizeText(text).toLowerCase();
     return BLACKLIST_SECTION_PHRASES.some((phrase) => normalized.includes(phrase));
@@ -299,6 +355,7 @@
   function getCurrentSiteKey() {
     const host = window.location.hostname.toLowerCase();
     if (host.includes("mycareersfuture.gov.sg")) return "myCareersFuture";
+    if (host.includes("linkedin.com")) return "linkedIn";
     if (host.includes("jobstreet.com")) return "jobStreet";
     return "generic";
   }
@@ -410,6 +467,38 @@
       .sort((a, b) => b.score - a.score || b.text.length - a.text.length);
 
     return scored[0]?.text || "";
+  }
+
+  function extractLinkedInJobDescriptionFallback() {
+    const root = document.querySelector("main") || document.body;
+    const fallbackSelectors = [
+      "section[aria-label*='job description' i]",
+      "section[aria-labelledby*='job description' i]",
+      "div[class*='description' i]",
+      "div[class*='job-description' i]",
+      "div[class*='jobs-unified-description' i]",
+      "div[class*='show-more-less-html' i]",
+      "div[data-test-job-description]",
+      "div[data-test-description]"
+    ];
+
+    for (const selector of fallbackSelectors) {
+      try {
+        const element = root.querySelector(selector);
+        const text = cleanExtractedText(getStructuredText(element));
+        if (text.length >= MIN_DESCRIPTION_LENGTH) {
+          logExtractionResult("LinkedIn fallback selector used", {
+            selector,
+            extractedCharCount: text.length
+          });
+          return text;
+        }
+      } catch (error) {
+        debugLog(`LinkedIn fallback selector failed: ${selector}`, error);
+      }
+    }
+
+    return "";
   }
 
   function logExtractionResult(eventName, details) {
@@ -762,6 +851,19 @@
       };
     }
 
+    if (siteKey === "linkedIn") {
+      const linkedInFallbackText = extractLinkedInJobDescriptionFallback();
+      if (linkedInFallbackText) {
+        return {
+          jobDescription: capJobDescription(linkedInFallbackText),
+          jobData: null,
+          validationError: "",
+          source: "linkedIn-fallback",
+          originalLength: linkedInFallbackText.length
+        };
+      }
+    }
+
     const bodyText = getText(document.body);
     if (bodyText.length > MIN_DESCRIPTION_LENGTH) {
       logExtractionResult("Fallback used", {
@@ -887,7 +989,7 @@
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), timeoutSeconds * 1000);
       try {
-const response = await fetch(url, {
+        const response = await runFetch(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
