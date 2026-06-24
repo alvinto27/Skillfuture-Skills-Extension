@@ -11,8 +11,12 @@ const state = {
     monthlyHours: 20
   },
   plan: [],
+  skillLevels: {},
   searchResults: [],
-  recommendations: []
+  recommendations: [],
+  recommendationRequestId: 0,
+  pathway: null,
+  pathwayRequestId: 0
 };
 
 const elements = {
@@ -37,6 +41,8 @@ const elements = {
   courseResults: document.getElementById("courseResults"),
   recommendedCourses: document.getElementById("recommendedCourses"),
   refreshRecommendations: document.getElementById("refreshRecommendations"),
+  pathwayContent: document.getElementById("pathwayContent"),
+  refreshPathway: document.getElementById("refreshPathway"),
   jobSelect: document.getElementById("jobSelect"),
   jobContextMessage: document.getElementById("jobContextMessage"),
   focusSkills: document.getElementById("focusSkills"),
@@ -164,6 +170,43 @@ function getFocusSkills(item) {
     .slice(0, 10);
 }
 
+function getSkillKey(skill) {
+  return normalizeText(skill).toLocaleLowerCase();
+}
+
+function getSkillLevel(skill) {
+  return clamp(toNumber(state.skillLevels[getSkillKey(skill)], 0), 0, 3);
+}
+
+function getSkillLevelLabel(level) {
+  return ["No experience", "Beginner", "Working knowledge", "Proficient"][level] || "No experience";
+}
+
+function getGapLabel(level) {
+  if (level >= 3) return { text: "No gap", className: "gap-label none" };
+  if (level === 2) return { text: "Medium gap", className: "gap-label" };
+  return { text: "High gap", className: "gap-label high" };
+}
+
+function getSelectedJob() {
+  return state.history.find((item) => item.id === state.selectedJobId) || state.history[0] || null;
+}
+
+function getSkillGaps(item = getSelectedJob()) {
+  return getFocusSkills(item)
+    .map((skill) => {
+      const currentLevel = getSkillLevel(skill);
+      return {
+        skill,
+        currentLevel,
+        currentLevelLabel: getSkillLevelLabel(currentLevel),
+        gap: Math.max(3 - currentLevel, 0)
+      };
+    })
+    .filter((item) => item.gap > 0)
+    .sort((left, right) => right.gap - left.gap || left.skill.localeCompare(right.skill));
+}
+
 function getPlanSummary() {
   const creditBalance = Math.max(toNumber(state.settings.creditBalance), 0);
   let creditRemaining = creditBalance;
@@ -200,7 +243,8 @@ async function savePlanner() {
   await storageSet({
     [PLANNER_STORAGE_KEY]: {
       settings: state.settings,
-      plan: state.plan
+      plan: state.plan,
+      skillLevels: state.skillLevels
     }
   });
 }
@@ -273,6 +317,23 @@ function createCourseCard(course, recommendation = null) {
       score.className = "tag status";
       score.textContent = `${Math.round(toNumber(recommendation.semantic_score) * 100)}% semantic match`;
       meta.appendChild(score);
+
+      const gapBySkill = new Map(
+        getSkillGaps().map((item) => [getSkillKey(item.skill), item])
+      );
+      const addressedGaps = (recommendation.matched_skills || [])
+        .map((item) => gapBySkill.get(getSkillKey(item.skill)))
+        .filter(Boolean)
+        .filter((item, index, all) => (
+          all.findIndex((candidate) => candidate.skill === item.skill) === index
+        ))
+        .slice(0, 2);
+      addressedGaps.forEach((gap) => {
+        const tag = document.createElement("span");
+        tag.className = gap.gap >= 2 ? "tag" : "tag status";
+        tag.textContent = `Addresses ${gap.skill}: ${getGapLabel(gap.currentLevel).text}`;
+        meta.appendChild(tag);
+      });
     }
 
     const hours = getCourseHours(course);
@@ -327,8 +388,13 @@ function renderRecommendations() {
     return;
   }
   if (!state.recommendations.length) {
+    const gaps = getSkillGaps();
     elements.recommendedCourses.appendChild(
-      createMessage("No recommendations loaded for this job.")
+      createMessage(
+        gaps.length
+          ? "No recommendations loaded for the selected skill gaps."
+          : "All extracted skills are marked proficient. No gap-based course is needed."
+      )
     );
     return;
   }
@@ -337,6 +403,133 @@ function renderRecommendations() {
       createCourseCard(recommendation.course, recommendation)
     );
   });
+}
+
+function createPathwayTotal(label, value) {
+  const item = document.createElement("div");
+  item.className = "pathway-total";
+  const itemLabel = document.createElement("span");
+  itemLabel.textContent = label;
+  const itemValue = document.createElement("strong");
+  itemValue.textContent = value;
+  item.append(itemLabel, itemValue);
+  return item;
+}
+
+function renderPathway() {
+  clearElement(elements.pathwayContent);
+  const gaps = getSkillGaps();
+  const stages = Array.isArray(state.pathway && state.pathway.stages)
+    ? state.pathway.stages
+    : [];
+
+  if (!gaps.length) {
+    elements.pathwayContent.appendChild(
+      createMessage("All extracted skills are marked proficient. No learning pathway is required.")
+    );
+    return;
+  }
+  if (!stages.length) {
+    elements.pathwayContent.appendChild(
+      createMessage("No pathway loaded for the current skill gaps.")
+    );
+    return;
+  }
+
+  const totals = state.pathway.totals || {};
+  const totalsRow = document.createElement("div");
+  totalsRow.className = "pathway-totals";
+  totalsRow.append(
+    createPathwayTotal("Fees", formatMoney(totals.estimated_fee)),
+    createPathwayTotal("Credit", formatMoney(totals.credit_used)),
+    createPathwayTotal("Cash", formatMoney(totals.cash_required)),
+    createPathwayTotal("Time", `${toNumber(totals.estimated_months)} month${toNumber(totals.estimated_months) === 1 ? "" : "s"}`)
+  );
+  elements.pathwayContent.appendChild(totalsRow);
+
+  const list = document.createElement("div");
+  list.className = "pathway-list";
+  stages.forEach((stage) => {
+    const row = document.createElement("article");
+    row.className = "pathway-stage";
+    const number = document.createElement("span");
+    number.className = "pathway-number";
+    number.textContent = String(stage.stage);
+
+    const content = document.createElement("div");
+    const heading = document.createElement("h3");
+    heading.textContent = `${stage.stage_label}: ${stage.title}`;
+    const reason = document.createElement("p");
+    reason.textContent = stage.why_this_stage;
+
+    const course = document.createElement("div");
+    course.className = "pathway-course";
+    const courseHead = document.createElement("div");
+    courseHead.className = "pathway-course-head";
+    const courseName = document.createElement("strong");
+    courseName.textContent = stage.course.title;
+    const addButton = document.createElement("button");
+    const alreadyPlanned = state.plan.some((item) => item.course.id === stage.course.id);
+    addButton.className = "button small primary";
+    addButton.type = "button";
+    addButton.disabled = alreadyPlanned;
+    addButton.textContent = alreadyPlanned ? "Added" : "Add";
+    addButton.addEventListener("click", () => addCourseToPlan(stage.course));
+    courseHead.append(courseName, addButton);
+
+    const rationale = document.createElement("p");
+    rationale.textContent = stage.why_this_course;
+    const action = document.createElement("p");
+    const actionLabel = document.createElement("strong");
+    actionLabel.textContent = "Action: ";
+    action.append(actionLabel, stage.practical_action);
+    const outcome = document.createElement("p");
+    outcome.className = "pathway-outcome";
+    const outcomeLabel = document.createElement("strong");
+    outcomeLabel.textContent = "Outcome: ";
+    outcome.append(outcomeLabel, stage.measurable_outcome);
+
+    const meta = document.createElement("div");
+    meta.className = "course-meta";
+    [
+      formatMoney(stage.estimated_fee),
+      `${toNumber(stage.duration_hours)} hours`,
+      `${formatMoney(stage.credit_used)} credit`,
+      `${formatMoney(stage.cash_required)} cash`
+    ].forEach((text) => {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = text;
+      meta.appendChild(tag);
+    });
+
+    course.append(courseHead, rationale, action, outcome, meta);
+    if (stage.alternative && stage.alternative.course) {
+      const alternative = document.createElement("div");
+      alternative.className = "pathway-alternative";
+      const alternativeName = document.createElement("span");
+      alternativeName.textContent = `Alternative: ${stage.alternative.course.title}`;
+      const alternativeButton = document.createElement("button");
+      const alternativePlanned = state.plan.some(
+        (item) => item.course.id === stage.alternative.course.id
+      );
+      alternativeButton.className = "button small";
+      alternativeButton.type = "button";
+      alternativeButton.disabled = alternativePlanned;
+      alternativeButton.textContent = alternativePlanned ? "Added" : "Use alternative";
+      alternativeButton.addEventListener(
+        "click",
+        () => addCourseToPlan(stage.alternative.course)
+      );
+      alternative.append(alternativeName, alternativeButton);
+      course.appendChild(alternative);
+    }
+
+    content.append(heading, reason, course);
+    row.append(number, content);
+    list.appendChild(row);
+  });
+  elements.pathwayContent.appendChild(list);
 }
 
 function renderPlan() {
@@ -469,24 +662,47 @@ function renderCareerContext() {
     elements.jobSelect.appendChild(option);
   });
 
-  const selected = state.history.find((item) => item.id === state.selectedJobId) || state.history[0];
+  const selected = getSelectedJob();
   state.selectedJobId = selected.id;
   elements.jobSelect.value = selected.id;
   const skills = getFocusSkills(selected);
   elements.jobContextMessage.textContent = skills.length
-    ? "Select a skill to search for related courses."
+    ? "Set your current level for each required skill. The target level is Proficient."
     : "This analysis did not contain saved skill matches.";
 
   skills.forEach((skill) => {
-    const button = document.createElement("button");
-    button.className = "button small";
-    button.type = "button";
-    button.textContent = skill;
-    button.addEventListener("click", () => {
-      elements.courseSearch.value = skill;
-      searchCourses(skill);
+    const row = document.createElement("div");
+    row.className = "skill-assessment";
+
+    const name = document.createElement("span");
+    name.className = "skill-assessment-name";
+    name.textContent = skill;
+
+    const level = document.createElement("select");
+    level.setAttribute("aria-label", `Current proficiency in ${skill}`);
+    ["No experience", "Beginner", "Working knowledge", "Proficient"].forEach((label, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `${index} - ${label}`;
+      level.appendChild(option);
     });
-    elements.focusSkills.appendChild(button);
+    const currentLevel = getSkillLevel(skill);
+    level.value = String(currentLevel);
+
+    const gap = document.createElement("span");
+    const gapState = getGapLabel(currentLevel);
+    gap.className = gapState.className;
+    gap.textContent = gapState.text;
+
+    level.addEventListener("change", async () => {
+      state.skillLevels[getSkillKey(skill)] = clamp(toNumber(level.value), 0, 3);
+      await savePlanner();
+      renderCareerContext();
+      await Promise.all([loadRecommendations(), loadPathway()]);
+    });
+
+    row.append(name, level, gap);
+    elements.focusSkills.appendChild(row);
   });
 }
 
@@ -575,9 +791,15 @@ async function searchCourses(keyword) {
 
 async function loadRecommendations() {
   clearElement(elements.recommendedCourses);
-  const selected = state.history.find((item) => item.id === state.selectedJobId) || state.history[0];
-  const skills = getFocusSkills(selected);
-  if (!selected || !skills.length) {
+  const selected = getSelectedJob();
+  const gaps = getSkillGaps(selected);
+  const skills = gaps.map((item) => item.skill);
+  if (!selected || !getFocusSkills(selected).length) {
+    state.recommendations = [];
+    renderRecommendations();
+    return;
+  }
+  if (!skills.length) {
     state.recommendations = [];
     renderRecommendations();
     return;
@@ -585,6 +807,7 @@ async function loadRecommendations() {
 
   elements.recommendedCourses.appendChild(createMessage("Ranking courses for this job..."));
   elements.refreshRecommendations.disabled = true;
+  const requestId = ++state.recommendationRequestId;
   try {
     const data = await postJson(
       `${state.backendBaseUrl}/api/recommendations/courses`,
@@ -594,16 +817,66 @@ async function loadRecommendations() {
         limit: 8
       }
     );
+    if (requestId !== state.recommendationRequestId) return;
     state.recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
     renderRecommendations();
   } catch (error) {
+    if (requestId !== state.recommendationRequestId) return;
     state.recommendations = [];
     clearElement(elements.recommendedCourses);
     elements.recommendedCourses.appendChild(
       createMessage(`Could not load recommendations. ${error.message}`, true)
     );
   } finally {
-    elements.refreshRecommendations.disabled = false;
+    if (requestId === state.recommendationRequestId) {
+      elements.refreshRecommendations.disabled = false;
+    }
+  }
+}
+
+async function loadPathway() {
+  clearElement(elements.pathwayContent);
+  const gaps = getSkillGaps();
+  if (!getSelectedJob() || !getFocusSkills(getSelectedJob()).length) {
+    state.pathway = null;
+    renderPathway();
+    return;
+  }
+  if (!gaps.length) {
+    state.pathway = null;
+    renderPathway();
+    return;
+  }
+
+  elements.pathwayContent.appendChild(createMessage("Building your three-stage pathway..."));
+  elements.refreshPathway.disabled = true;
+  const requestId = ++state.pathwayRequestId;
+  try {
+    const data = await postJson(
+      `${state.backendBaseUrl}/api/recommendations/learning-pathway`,
+      {
+        skill_gaps: gaps.map((item) => ({
+          skill: item.skill,
+          current_level: item.currentLevel
+        })),
+        available_credit: state.settings.creditBalance,
+        monthly_hours: state.settings.monthlyHours
+      }
+    );
+    if (requestId !== state.pathwayRequestId) return;
+    state.pathway = data;
+    renderPathway();
+  } catch (error) {
+    if (requestId !== state.pathwayRequestId) return;
+    state.pathway = null;
+    clearElement(elements.pathwayContent);
+    elements.pathwayContent.appendChild(
+      createMessage(`Could not build the pathway. ${error.message}`, true)
+    );
+  } finally {
+    if (requestId === state.pathwayRequestId) {
+      elements.refreshPathway.disabled = false;
+    }
   }
 }
 
@@ -628,6 +901,7 @@ async function addCourseToPlan(course) {
   renderCourseResults();
   renderRecommendations();
   renderPlan();
+  renderPathway();
 }
 
 async function removePlanItem(index) {
@@ -636,6 +910,7 @@ async function removePlanItem(index) {
   renderCourseResults();
   renderRecommendations();
   renderPlan();
+  renderPathway();
 }
 
 async function loadDashboard() {
@@ -655,6 +930,9 @@ async function loadDashboard() {
     state.settings.monthlyHours = Math.max(toNumber(planner.settings.monthlyHours, 20), 1);
   }
   state.plan = Array.isArray(planner.plan) ? planner.plan : [];
+  state.skillLevels = planner.skillLevels && typeof planner.skillLevels === "object"
+    ? planner.skillLevels
+    : {};
 
   elements.creditBalance.value = String(state.settings.creditBalance);
   elements.monthlyHours.value = String(state.settings.monthlyHours);
@@ -663,8 +941,11 @@ async function loadDashboard() {
   renderCourseResults();
   renderCareerContext();
   renderRecommendations();
+  renderPathway();
   const backendOnline = await checkBackend();
-  if (backendOnline) await loadRecommendations();
+  if (backendOnline) {
+    await Promise.all([loadRecommendations(), loadPathway()]);
+  }
 }
 
 elements.creditBalance.addEventListener("input", async () => {
@@ -672,12 +953,14 @@ elements.creditBalance.addEventListener("input", async () => {
   await savePlanner();
   renderPlan();
 });
+elements.creditBalance.addEventListener("change", loadPathway);
 
 elements.monthlyHours.addEventListener("input", async () => {
   state.settings.monthlyHours = Math.max(toNumber(elements.monthlyHours.value, 1), 1);
   await savePlanner();
   renderSummary();
 });
+elements.monthlyHours.addEventListener("change", loadPathway);
 
 elements.courseSearchForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -688,9 +971,11 @@ elements.jobSelect.addEventListener("change", () => {
   state.selectedJobId = elements.jobSelect.value;
   renderCareerContext();
   loadRecommendations();
+  loadPathway();
 });
 
 elements.refreshRecommendations.addEventListener("click", loadRecommendations);
+elements.refreshPathway.addEventListener("click", loadPathway);
 
 elements.clearPlan.addEventListener("click", async () => {
   if (!state.plan.length) return;
@@ -700,6 +985,7 @@ elements.clearPlan.addEventListener("click", async () => {
   await savePlanner();
   renderCourseResults();
   renderPlan();
+  renderPathway();
 });
 
 document.addEventListener("DOMContentLoaded", loadDashboard);

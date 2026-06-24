@@ -15,6 +15,7 @@ from sentence_transformers import SentenceTransformer
 import skillsfuture_config as settings
 from course_semantic_search import CourseSemanticIndex
 from course_recommender import get_career_roles, list_courses, get_course, recommend_course_pathway
+from learning_pathway import build_actionable_pathway
 from skillsfuture_db import connect, initialize_database, utc_now
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -97,6 +98,18 @@ class SemanticCourseRecommendationRequest(BaseModel):
     maximum_duration_hours: float | None = Field(default=None, gt=0)
     require_upcoming_run: bool = False
     limit: int = Field(default=10, ge=1, le=20)
+
+
+class SkillGapInput(BaseModel):
+    skill: str = Field(min_length=1, max_length=120)
+    current_level: int = Field(ge=0, le=3)
+
+
+class ActionablePathwayRequest(BaseModel):
+    skill_gaps: list[SkillGapInput] = Field(min_length=1, max_length=10)
+    available_credit: float = Field(default=0, ge=0)
+    monthly_hours: float = Field(default=20, gt=0)
+    maximum_duration_hours: float | None = Field(default=None, gt=0)
 
 
 def get_cosine_similarity(vec1, vec_matrix):
@@ -406,6 +419,28 @@ async def api_semantic_course_recommendations(request: SemanticCourseRecommendat
         "recommendations": recommendations,
         "index_model": course_index.model_name,
         "attribution": "Recommendations use local semantic retrieval over imported course data. Verify current course details and funding eligibility with SkillsFuture Singapore.",
+    }
+
+
+@app.post("/api/recommendations/learning-pathway")
+async def api_actionable_learning_pathway(request: ActionablePathwayRequest):
+    if not course_index.ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Course semantic index is not built. Run precompute_course_embeddings.py.",
+        )
+
+    pathway = build_actionable_pathway(
+        course_index=course_index,
+        embedding_model=embedding_model,
+        skill_gaps=[item.model_dump() for item in request.skill_gaps],
+        available_credit=request.available_credit,
+        monthly_hours=request.monthly_hours,
+        maximum_duration_hours=request.maximum_duration_hours,
+    )
+    return {
+        **pathway,
+        "attribution": "Pathway stages use local semantic retrieval, self-reported proficiency gaps, and deterministic fee and credit calculations.",
     }
 
 

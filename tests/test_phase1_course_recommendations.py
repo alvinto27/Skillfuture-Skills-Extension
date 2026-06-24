@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from course_semantic_search import CourseSemanticIndex
+from learning_pathway import build_actionable_pathway
 from skillsfuture_sync import SchemaDriftError, load_local_dataset, normalize_column
 from skillsfuture_db import initialize_database, connect, get_or_create_skill, json_dumps, utc_now
 import skillsfuture_config as settings
@@ -179,6 +180,96 @@ class Phase1Tests(unittest.TestCase):
                 self.assertEqual(recommendations[0]["estimated_fee"], 400)
             finally:
                 settings.COURSE_DB_PATH = old_path
+
+    def test_actionable_pathway_limits_stages_and_allocates_credit(self):
+        courses = {
+            "Python": [
+                {
+                    "course": {"id": 1, "title": "Python Foundations"},
+                    "semantic_score": 0.8,
+                    "confidence_label": "Strong match",
+                    "estimated_fee": 300,
+                    "duration_hours": 20,
+                    "has_upcoming_run": True,
+                    "explanation": "Strong match for Python.",
+                },
+                {
+                    "course": {"id": 11, "title": "Alternative Python"},
+                    "semantic_score": 0.7,
+                    "confidence_label": "Strong match",
+                    "estimated_fee": 200,
+                    "duration_hours": 10,
+                    "has_upcoming_run": True,
+                    "explanation": "Strong match for Python.",
+                },
+            ],
+            "SQL": [
+                {
+                    "course": {"id": 2, "title": "SQL Core Skills"},
+                    "semantic_score": 0.75,
+                    "confidence_label": "Strong match",
+                    "estimated_fee": 250,
+                    "duration_hours": 16,
+                    "has_upcoming_run": True,
+                    "explanation": "Strong match for SQL.",
+                },
+                {
+                    "course": {"id": 12, "title": "Alternative SQL"},
+                    "semantic_score": 0.65,
+                    "confidence_label": "Strong match",
+                    "estimated_fee": 180,
+                    "duration_hours": 8,
+                    "has_upcoming_run": False,
+                    "explanation": "Strong match for SQL.",
+                },
+            ],
+            "Communication": [
+                {
+                    "course": {"id": 3, "title": "Applied Communication"},
+                    "semantic_score": 0.6,
+                    "confidence_label": "Strong match",
+                    "estimated_fee": 100,
+                    "duration_hours": 8,
+                    "has_upcoming_run": True,
+                    "explanation": "Strong match for Communication.",
+                },
+            ],
+        }
+
+        class FakeModel:
+            def encode(self, skills, **kwargs):
+                return np.asarray([[1.0, 0.0] for _ in skills], dtype=np.float32)
+
+        class FakeIndex:
+            def search(self, skills, **kwargs):
+                return courses[skills[0]]
+
+        pathway = build_actionable_pathway(
+            course_index=FakeIndex(),
+            embedding_model=FakeModel(),
+            skill_gaps=[
+                {"skill": "Python", "current_level": 0},
+                {"skill": "SQL", "current_level": 1},
+                {"skill": "Communication", "current_level": 2},
+                {"skill": "Already Proficient", "current_level": 3},
+            ],
+            available_credit=400,
+            monthly_hours=20,
+        )
+
+        self.assertEqual(len(pathway["stages"]), 3)
+        self.assertEqual(pathway["stages"][0]["stage_label"], "Foundation")
+        self.assertEqual(pathway["stages"][0]["credit_used"], 300)
+        self.assertEqual(pathway["stages"][1]["credit_used"], 100)
+        self.assertEqual(pathway["stages"][1]["cash_required"], 150)
+        self.assertEqual(pathway["totals"]["estimated_fee"], 650)
+        self.assertEqual(pathway["totals"]["credit_used"], 400)
+        self.assertEqual(pathway["totals"]["cash_required"], 250)
+        self.assertEqual(pathway["totals"]["estimated_months"], 3)
+        self.assertNotIn(
+            "Already Proficient",
+            [item["skill"] for item in pathway["prioritized_skill_gaps"]],
+        )
 
 
 if __name__ == "__main__":

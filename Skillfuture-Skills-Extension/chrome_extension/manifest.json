@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SkillsFuture Analyzer Hook",
-  "version": "0.5.0",
-  "description": "Analyzes job skills and provides semantic SkillsFuture course recommendations and credit planning.",
+  "version": "0.7.0",
+  "description": "Builds a gap-based SkillsFuture course pathway with credit and action planning.",
   "permissions": ["storage"],
   "host_permissions": [
     "http://localhost:8000/*",

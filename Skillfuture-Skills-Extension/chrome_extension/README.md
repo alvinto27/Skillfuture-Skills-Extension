@@ -52,12 +52,14 @@ The content script checks `window.__skillsfuture_backend_url` first, then Chrome
 
 1. Start FastAPI so the local course catalogue is available.
 2. Analyze a job and select **Dashboard** in the results panel, or open `dashboard.html` from the extension URL.
-3. Enter the user's currently available SkillsFuture Credit balance.
-4. Review semantic course recommendations generated from the selected job's matched skills.
-5. Search semantically for additional courses and select **Add to plan**.
-6. Set each course's status, target start date, and requested credit amount.
+3. Rate current proficiency for each extracted job skill from 0 to 3.
+4. Enter the user's currently available SkillsFuture Credit balance.
+5. Review recommendations generated only for skills below Proficient.
+6. Review the ordered three-stage pathway with actions and measurable outcomes.
+7. Search semantically for additional courses and select **Add to plan**.
+8. Set each course's status, target start date, and requested credit amount.
 
-The dashboard stores the plan in Chrome local storage. Fee and credit figures are estimates based on the imported local course dataset and are not an official eligibility or balance check.
+The dashboard stores proficiency levels and the plan in Chrome local storage. Fee and credit figures are estimates based on the imported local course dataset and are not an official eligibility or balance check.
 
 ## Supported pages
 

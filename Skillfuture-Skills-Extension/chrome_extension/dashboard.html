@@ -357,6 +357,109 @@
       font-size: 13px;
     }
 
+    .pathway-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .pathway-stage {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 11px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .pathway-stage:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+
+    .pathway-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .pathway-stage h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .pathway-stage p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pathway-course {
+      margin-top: 9px;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      background: #f9fafb;
+    }
+
+    .pathway-course-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .pathway-course strong {
+      display: block;
+      line-height: 1.35;
+    }
+
+    .pathway-outcome {
+      color: var(--text) !important;
+    }
+
+    .pathway-alternative {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .pathway-totals {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .pathway-total {
+      padding: 9px;
+      border-radius: 6px;
+      background: #f2f4f7;
+    }
+
+    .pathway-total span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .pathway-total strong {
+      display: block;
+      margin-top: 2px;
+      font-size: 13px;
+    }
+
     .budget-bar {
       overflow: hidden;
       height: 9px;
@@ -386,11 +489,57 @@
 
     .context-select { min-width: 210px; max-width: 340px; }
 
-    .focus-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
+    .skill-assessment-list {
+      display: grid;
+      gap: 8px;
       margin-top: 12px;
+    }
+
+    .skill-assessment {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(140px, 0.55fr) auto;
+      gap: 9px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      background: #f9fafb;
+    }
+
+    .skill-assessment-name {
+      min-width: 0;
+      font-weight: 730;
+      overflow-wrap: anywhere;
+    }
+
+    .skill-assessment select {
+      min-height: 34px;
+      font-size: 12px;
+    }
+
+    .gap-label {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 84px;
+      min-height: 25px;
+      border-radius: 999px;
+      background: var(--warning-soft);
+      color: var(--warning);
+      font-size: 11px;
+      font-weight: 750;
+      padding: 3px 8px;
+      white-space: nowrap;
+    }
+
+    .gap-label.high {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .gap-label.none {
+      background: var(--success-soft);
+      color: var(--success);
     }
 
     .empty,
@@ -426,10 +575,13 @@
       .topbar-inner, .panel-header, .course-head, .plan-head { display: block; }
       .connection, .context-select { margin-top: 10px; width: 100%; max-width: none; }
       .summary, .form-grid, .plan-controls, .allocation { grid-template-columns: 1fr; }
+      .pathway-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .skill-assessment { grid-template-columns: 1fr; }
       .search-row { grid-template-columns: minmax(0, 1fr) auto; }
       .budget-copy { align-items: flex-start; }
       .budget-copy span { min-width: 0; overflow-wrap: anywhere; }
       .course-head .button, .plan-head .button { margin-top: 10px; width: 100%; }
+      .pathway-alternative { align-items: stretch; flex-direction: column; }
     }
   </style>
 </head>
@@ -476,6 +628,20 @@
         <section class="panel">
           <div class="panel-header">
             <div>
+              <h2 class="panel-title">Career Context</h2>
+              <p class="panel-note">Rate your current proficiency so recommendations focus on actual gaps.</p>
+            </div>
+            <select class="context-select" id="jobSelect" aria-label="Analyzed job"></select>
+          </div>
+          <div class="panel-body">
+            <p class="panel-note" id="jobContextMessage">No analyzed jobs have been saved yet.</p>
+            <div class="skill-assessment-list" id="focusSkills"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
               <h2 class="panel-title">Budget Settings</h2>
               <p class="panel-note">Enter your current usable SkillsFuture Credit balance.</p>
             </div>
@@ -505,8 +671,21 @@
         <section class="panel">
           <div class="panel-header">
             <div>
+              <h2 class="panel-title">Your Actionable Pathway</h2>
+              <p class="panel-note">Up to three ordered stages based on your largest remaining gaps.</p>
+            </div>
+            <button class="button small" id="refreshPathway" type="button">Refresh</button>
+          </div>
+          <div class="panel-body">
+            <div id="pathwayContent"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
               <h2 class="panel-title">Recommended For This Job</h2>
-              <p class="panel-note">Semantic matches based on the official skills found in the selected job.</p>
+              <p class="panel-note">Courses target job skills you have not marked as proficient.</p>
             </div>
             <button class="button small" id="refreshRecommendations" type="button">Refresh</button>
           </div>
@@ -528,20 +707,6 @@
               <button class="button primary" id="searchButton" type="submit">Search</button>
             </form>
             <div class="course-list" id="courseResults"></div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header">
-            <div>
-              <h2 class="panel-title">Career Context</h2>
-              <p class="panel-note">Use skills from a previously analyzed job to guide course searches.</p>
-            </div>
-            <select class="context-select" id="jobSelect" aria-label="Analyzed job"></select>
-          </div>
-          <div class="panel-body">
-            <p class="panel-note" id="jobContextMessage">No analyzed jobs have been saved yet.</p>
-            <div class="focus-list" id="focusSkills"></div>
           </div>
         </section>
       </div>

@@ -128,7 +128,29 @@ Set `"include_rag": true` in the request body to add one grounded OpenAI recomme
 
 Reload the unpacked extension after changing extension files.
 
-The dashboard provides job-grounded semantic course recommendations, semantic course search, learning-plan statuses, target dates, user-controlled credit allocation, and estimates for subsidized fees, remaining credit, cash payable, and learning hours.
+The dashboard provides:
+
+- A 0–3 self-assessment for each extracted job skill
+- Gap-based recommendations that exclude skills marked proficient
+- A maximum three-stage pathway: Foundation, Core Capability, and Applied Evidence
+- Job-grounded semantic course recommendations
+- Semantic course search
+- Learning-plan statuses and target dates
+- User-controlled credit allocation
+- Estimates for subsidized fees, remaining credit, cash payable, and learning hours
+
+The proficiency scale is:
+
+```text
+0 No experience
+1 Beginner
+2 Working knowledge
+3 Proficient
+```
+
+Course recommendations target levels below `3`. This is a user self-assessment, not an inferred or certified proficiency score.
+
+Each pathway stage contains one primary course, one alternative where available, dataset-backed reasoning, estimated fee and credit allocation, one practical action, and one measurable outcome.
 
 Credit calculations are planning estimates. They do not query a live SkillsFuture account or determine funding eligibility.
 
@@ -141,6 +163,7 @@ GET  /api/career-roles
 GET  /api/courses
 GET  /api/courses/{course_id}
 POST /api/recommendations/courses
+POST /api/recommendations/learning-pathway
 POST /api/recommendations/course-pathway
 POST /api/recommendations/feedback
 ```
@@ -157,6 +180,14 @@ Example semantic course recommendation:
 curl.exe -X POST http://localhost:8000/api/recommendations/courses `
   -H "Content-Type: application/json" `
   -d "{\"skills\":[\"Python\",\"data analysis\"],\"max_budget\":1000,\"limit\":5}"
+```
+
+Example actionable pathway:
+
+```powershell
+curl.exe -X POST http://localhost:8000/api/recommendations/learning-pathway `
+  -H "Content-Type: application/json" `
+  -d "{\"skill_gaps\":[{\"skill\":\"Python\",\"current_level\":1},{\"skill\":\"SQL\",\"current_level\":2}],\"available_credit\":500,\"monthly_hours\":20}"
 ```
 
 ## Tests
