@@ -1,0 +1,19 @@
+{
+  "status": "passed",
+  "network_request": {
+    "url": "http://localhost:8000/analyze-job",
+    "status": 200,
+    "job_description_length": 508
+  },
+  "result_count": 5,
+  "top_extracted_skills": [
+    "Python",
+    "SQL",
+    "API integration",
+    "Cloud deployment",
+    "REST API"
+  ],
+  "modal_contains_results": true,
+  "modal_preview": "Extracted skillPython->Official SkillsFuture matchProgramming and CodingLow confidence - 36%Emerging SkillDefinition: Develop technical capabilities to understand, design and write instructions to be processed by computers as software progr",
+  "console_logged_result": true
+}

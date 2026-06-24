@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "SkillsFuture Analyzer Hook",
+  "version": "0.3.6",
+  "description": "Adds an Analyze with SkillsFuture button on job pages and sends the job text to your FastAPI backend.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ],
+  "options_page": "options.html",
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dashboard.html",
+        "dashboard.js"
+      ],
+      "matches": [
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*",
+        "https://www.mycareersfuture.gov.sg/*",
+        "https://mycareersfuture.gov.sg/*",
+        "https://*.mycareersfuture.gov.sg/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "file:///*"
+      ]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.linkedin.com/jobs/*",
+        "https://linkedin.com/jobs/*",
+        "https://www.mycareersfuture.gov.sg/*",
+        "https://mycareersfuture.gov.sg/*",
+        "https://*.mycareersfuture.gov.sg/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "file:///*"
+      ],
+      "js": ["contentScript.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
