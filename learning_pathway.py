@@ -42,6 +42,8 @@ def normalize_skill_gaps(skill_gaps):
             "skill": skill,
             "current_level": current_level,
             "gap": gap,
+            "job_skill": " ".join(str(item.get("job_skill") or "").split())[:120],
+            "source_evidence": " ".join(str(item.get("source_evidence") or "").split())[:500],
         })
     normalized.sort(key=lambda item: (-item["gap"], item["skill"].casefold()))
     return normalized[:3]

@@ -40,7 +40,7 @@ def get_career_roles():
         conn.close()
 
 
-def list_courses(keyword=None, skill=None, provider=None, delivery_mode=None, category=None, active_upcoming_runs=False):
+def _course_filters(keyword=None, skill=None, provider=None, delivery_mode=None, category=None, active_upcoming_runs=False):
     filters = ["c.is_active = 1"]
     params = []
     joins = []
@@ -67,17 +67,61 @@ def list_courses(keyword=None, skill=None, provider=None, delivery_mode=None, ca
             filters.append("(cr_filter.start_date IS NULL OR cr_filter.start_date >= ?)")
             params.append(date.today().isoformat())
 
+    return filters, params, joins
+
+
+def list_courses(
+    keyword=None,
+    skill=None,
+    provider=None,
+    delivery_mode=None,
+    category=None,
+    active_upcoming_runs=False,
+    limit=20,
+    offset=0,
+):
+    filters, params, joins = _course_filters(
+        keyword=keyword,
+        skill=skill,
+        provider=provider,
+        delivery_mode=delivery_mode,
+        category=category,
+        active_upcoming_runs=active_upcoming_runs,
+    )
     sql = f"""
         SELECT DISTINCT c.*
         FROM courses c
         {' '.join(joins)}
         WHERE {' AND '.join(filters)}
         ORDER BY c.title
-        LIMIT 100
+        LIMIT ? OFFSET ?
     """
+    params.extend([int(limit), int(offset)])
     conn = connect()
     try:
         return rows_to_dicts(conn.execute(sql, params).fetchall())
+    finally:
+        conn.close()
+
+
+def count_courses(keyword=None, skill=None, provider=None, delivery_mode=None, category=None, active_upcoming_runs=False):
+    filters, params, joins = _course_filters(
+        keyword=keyword,
+        skill=skill,
+        provider=provider,
+        delivery_mode=delivery_mode,
+        category=category,
+        active_upcoming_runs=active_upcoming_runs,
+    )
+    sql = f"""
+        SELECT COUNT(DISTINCT c.id)
+        FROM courses c
+        {' '.join(joins)}
+        WHERE {' AND '.join(filters)}
+    """
+    conn = connect()
+    try:
+        return int(conn.execute(sql, params).fetchone()[0])
     finally:
         conn.close()
 

@@ -33,6 +33,12 @@
       padding: 10px 11px;
       font: inherit;
     }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
     .actions {
       display: flex;
       align-items: center;
@@ -63,11 +69,23 @@
     <h1>SkillsFuture Analyzer Options</h1>
     <label for="backendUrl">Backend URL</label>
     <input id="backendUrl" type="url" placeholder="http://localhost:8000/analyze-job">
+    <label for="apiAccessToken" style="margin-top: 16px;">Backend access token</label>
+    <input id="apiAccessToken" type="password" autocomplete="off" placeholder="Optional">
+    <div class="settings-grid">
+      <div>
+        <label for="retryCount">Network retries</label>
+        <input id="retryCount" type="number" min="0" max="3" step="1" value="1">
+      </div>
+      <div>
+        <label for="timeoutSeconds">Request timeout (seconds)</label>
+        <input id="timeoutSeconds" type="number" min="5" max="120" step="1" value="45">
+      </div>
+    </div>
     <div class="actions">
       <button id="save" type="button">Save</button>
       <span id="status" role="status"></span>
     </div>
-    <p>Use the base API URL or the full /analyze-job endpoint. The extension normalizes either form before sending requests.</p>
+    <p>The access token must match API_ACCESS_TOKEN in config.py when backend authentication is enabled. Retries apply to network failures, rate limits, and temporary server errors.</p>
   </main>
   <script src="options.js"></script>
 </body>

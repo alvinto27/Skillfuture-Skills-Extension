@@ -1,21 +1,41 @@
+import asyncio
+import hashlib
 import json
-import os
+import logging
+import math
 import re
+import secrets
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
-import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
 import skillsfuture_config as settings
 from course_semantic_search import CourseSemanticIndex
-from course_recommender import get_career_roles, list_courses, get_course, recommend_course_pathway
+from course_recommender import (
+    count_courses,
+    get_career_roles,
+    get_course,
+    list_courses,
+    recommend_course_pathway,
+)
 from learning_pathway import build_actionable_pathway
+from pathway_narrative import generate_grounded_pathway_narrative
+from reliability import (
+    SlidingWindowRateLimiter,
+    TTLCache,
+    log_event,
+    request_id,
+    run_with_timeout,
+)
+from skill_index import load_skill_index
 from skillsfuture_db import connect, initialize_database, utc_now
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -29,66 +49,191 @@ try:
 except ImportError:
     CONFIG_OPENAI_API_KEY = ""
 
-OPENAI_API_KEY = CONFIG_OPENAI_API_KEY or os.getenv("OPENAI_API_KEY", "")
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+OPENAI_API_KEY = CONFIG_OPENAI_API_KEY
+client = (
+    OpenAI(
+        api_key=OPENAI_API_KEY,
+        timeout=settings.OPENAI_TIMEOUT_SECONDS,
+        max_retries=settings.OPENAI_MAX_RETRIES,
+    )
+    if OPENAI_API_KEY
+    else None
+)
 
-app = FastAPI(title="SkillsFuture Job Skill Matcher", version="0.4.0")
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+app = FastAPI(title="SkillsFuture Job Skill Matcher", version="0.5.0")
+
+cors_origins = []
+if settings.EXTENSION_ID:
+    cors_origins.append(f"chrome-extension://{settings.EXTENSION_ID}")
+if settings.ALLOW_LOCAL_DEVELOPMENT_ORIGINS:
+    cors_origins.extend([
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "null",
+    ])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "https://www.linkedin.com",
-        "https://linkedin.com",
-        "https://www.mycareersfuture.gov.sg",
-        "https://mycareersfuture.gov.sg",
-        "https://www.jobstreet.com.sg",
-        "https://sg.jobstreet.com",
-        "null",
-    ],
-    allow_origin_regex=r"^chrome-extension://[a-z]{32}$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^file://.*$",
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins,
+    allow_origin_regex=(
+        r"^chrome-extension://[a-z]{32}$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^file://.*$"
+        if settings.ALLOW_LOCAL_DEVELOPMENT_ORIGINS
+        else None
+    ),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "X-Request-ID"],
 )
 
-if not SKILLS_FILE.exists():
-    raise RuntimeError(
-        f"Missing {SKILLS_FILE.name}. Run precompute_embeddings_local.py before starting the API."
-    )
-
-skills_df = pd.read_pickle(SKILLS_FILE)
-db_embeddings = np.stack(skills_df["embedding"].values)
+skills_df, db_embeddings, skill_index_error = load_skill_index(SKILLS_FILE)
 embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 course_index = CourseSemanticIndex(settings.COURSE_EMBEDDINGS_PATH)
-initialize_database()
+database_error = ""
+try:
+    initialize_database()
+except Exception as exc:
+    database_error = f"Course database could not be initialized: {type(exc).__name__}"
+
+job_analysis_cache = TTLCache(
+    max_size=settings.JOB_ANALYSIS_CACHE_MAX_SIZE,
+    ttl_seconds=settings.JOB_ANALYSIS_CACHE_TTL_SECONDS,
+)
+query_embedding_cache = TTLCache(
+    max_size=settings.QUERY_EMBEDDING_CACHE_MAX_SIZE,
+    ttl_seconds=settings.QUERY_EMBEDDING_CACHE_TTL_SECONDS,
+)
+rate_limiter = SlidingWindowRateLimiter(
+    limit=settings.RATE_LIMIT_REQUESTS,
+    window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+)
+RATE_LIMITED_PATHS = {
+    "/analyze-job",
+    "/api/recommendations/courses",
+    "/api/recommendations/learning-pathway",
+    "/api/recommendations/course-pathway",
+}
+
+
+@app.middleware("http")
+async def reliability_middleware(request: Request, call_next):
+    current_request_id = request.headers.get("x-request-id") or request_id()
+    started = time.perf_counter()
+    client_host = request.client.host if request.client else "unknown"
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            request_size = int(content_length)
+        except ValueError:
+            request_size = settings.MAX_REQUEST_BODY_BYTES + 1
+        if request_size > settings.MAX_REQUEST_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request body is too large."},
+                headers={"X-Request-ID": current_request_id},
+            )
+
+    if settings.API_ACCESS_TOKEN and request.url.path != "/health":
+        authorization = request.headers.get("authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        authenticated = (
+            scheme.casefold() == "bearer"
+            and token
+            and secrets.compare_digest(token, settings.API_ACCESS_TOKEN)
+        )
+        if not authenticated:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required."},
+                headers={
+                    "WWW-Authenticate": "Bearer",
+                    "X-Request-ID": current_request_id,
+                },
+            )
+
+    if request.url.path in RATE_LIMITED_PATHS:
+        allowed, retry_after = rate_limiter.check(f"{client_host}:{request.url.path}")
+        if not allowed:
+            log_event(
+                "rate_limited",
+                request_id=current_request_id,
+                method=request.method,
+                path=request.url.path,
+                client=client_host,
+            )
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Try again shortly."},
+                headers={
+                    "Retry-After": str(retry_after),
+                    "X-Request-ID": current_request_id,
+                },
+            )
+
+    try:
+        response = await asyncio.wait_for(
+            call_next(request),
+            timeout=settings.API_REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        response = JSONResponse(
+            status_code=504,
+            content={"detail": "The request timed out. Try again."},
+        )
+    except Exception:
+        log_event(
+            "unhandled_error",
+            request_id=current_request_id,
+            method=request.method,
+            path=request.url.path,
+            client=client_host,
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "An internal server error occurred."},
+        )
+
+    response.headers["X-Request-ID"] = current_request_id
+    log_event(
+        "request_completed",
+        request_id=current_request_id,
+        method=request.method,
+        path=request.url.path,
+        status=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        client=client_host,
+    )
+    return response
 
 
 class JobRequest(BaseModel):
-    job_description: str
+    job_description: str = Field(min_length=10, max_length=MAX_JOB_DESCRIPTION_LENGTH)
     job_data: dict[str, Any] | None = None
     include_rag: bool = False
 
 
+class UserSkillInput(BaseModel):
+    canonical_name: str = Field(min_length=1, max_length=120)
+    current_level: int = Field(ge=0, le=5)
+
+
 class CoursePathwayRequest(BaseModel):
-    target_role_id: int
-    user_skills: list[dict[str, Any]] = Field(default_factory=list)
-    max_budget: float | None = None
-    available_hours_per_week: float | None = None
-    preferred_delivery_modes: list[str] = Field(default_factory=list)
-    earliest_start_date: str | None = None
-    latest_start_date: str | None = None
-    preferred_location: str | None = None
-    maximum_course_duration: float | None = None
-    skills_to_avoid: list[str] = Field(default_factory=list)
+    target_role_id: int = Field(gt=0)
+    user_skills: list[UserSkillInput] = Field(default_factory=list, max_length=100)
+    max_budget: float | None = Field(default=None, ge=0, le=1_000_000)
+    available_hours_per_week: float | None = Field(default=None, gt=0, le=168)
+    preferred_delivery_modes: list[str] = Field(default_factory=list, max_length=20)
+    earliest_start_date: str | None = Field(default=None, max_length=10)
+    latest_start_date: str | None = Field(default=None, max_length=10)
+    preferred_location: str | None = Field(default=None, max_length=160)
+    maximum_course_duration: float | None = Field(default=None, gt=0, le=100_000)
+    skills_to_avoid: list[str] = Field(default_factory=list, max_length=100)
 
 
 class RecommendationFeedbackRequest(BaseModel):
-    user_id: str = "anonymous"
-    course_id: int
-    target_role_id: int | None = None
-    feedback_type: str
-    reason: str | None = None
+    course_id: int = Field(gt=0)
+    target_role_id: int | None = Field(default=None, gt=0)
+    feedback_type: Literal["relevant", "not_relevant"]
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class SemanticCourseRecommendationRequest(BaseModel):
@@ -103,13 +248,17 @@ class SemanticCourseRecommendationRequest(BaseModel):
 class SkillGapInput(BaseModel):
     skill: str = Field(min_length=1, max_length=120)
     current_level: int = Field(ge=0, le=3)
+    job_skill: str = Field(default="", max_length=120)
+    source_evidence: str = Field(default="", max_length=500)
 
 
 class ActionablePathwayRequest(BaseModel):
     skill_gaps: list[SkillGapInput] = Field(min_length=1, max_length=10)
     available_credit: float = Field(default=0, ge=0)
-    monthly_hours: float = Field(default=20, gt=0)
-    maximum_duration_hours: float | None = Field(default=None, gt=0)
+    monthly_hours: float = Field(default=20, gt=0, le=744)
+    maximum_duration_hours: float | None = Field(default=None, gt=0, le=100_000)
+    target_role: str = Field(default="", max_length=160)
+    include_narrative: bool = False
 
 
 def get_cosine_similarity(vec1, vec_matrix):
@@ -184,6 +333,49 @@ def normalize_extracted_skills(value):
     return normalized
 
 
+def get_query_embeddings(skills):
+    normalized_key = tuple(skill.casefold() for skill in skills)
+    cached = query_embedding_cache.get(normalized_key)
+    if cached is not None:
+        return np.asarray(cached, dtype=np.float32), True
+    embeddings = embedding_model.encode(
+        skills,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+    )
+    embeddings = np.asarray(embeddings, dtype=np.float32)
+    query_embedding_cache.set(normalized_key, embeddings)
+    return embeddings, False
+
+
+class CachedEmbeddingModel:
+    def encode(self, skills, **_kwargs):
+        embeddings, _ = get_query_embeddings(list(skills))
+        return embeddings
+
+
+cached_embedding_model = CachedEmbeddingModel()
+
+
+def course_index_status():
+    return course_index.freshness()
+
+
+def require_course_index():
+    status = course_index_status()
+    if status["status"] == "unavailable":
+        raise HTTPException(
+            status_code=503,
+            detail="Course semantic index is unavailable. Run precompute_course_embeddings.py.",
+        )
+    if status["stale"]:
+        raise HTTPException(
+            status_code=503,
+            detail="Course semantic index is stale. Run precompute_course_embeddings.py.",
+        )
+    return status
+
+
 def build_rag_recommendation(final_results):
     """Use retrieved SkillsFuture matches as grounding context for one recommendation call."""
     if client is None:
@@ -253,25 +445,26 @@ def build_rag_recommendation(final_results):
 
 @app.get("/health")
 async def health():
+    index_status = course_index_status()
+    healthy = not skill_index_error and not database_error and not index_status["stale"]
     return {
-        "status": "ok",
+        "status": "ok" if healthy else "degraded",
         "skills_loaded": len(skills_df),
-        "course_database_ready": True,
+        "skill_index_error": skill_index_error or None,
+        "course_database_ready": not database_error,
+        "course_database_error": database_error or None,
         "course_semantic_index_ready": course_index.ready,
+        "course_semantic_index": index_status,
         "courses_indexed": len(course_index.course_ids),
         "openai_configured": client is not None,
+        "cache": {
+            "job_analyses": len(job_analysis_cache),
+            "query_embeddings": len(query_embedding_cache),
+        },
     }
 
 
-@app.post("/analyze-job")
-async def analyze_job(request: JobRequest):
-    job_description = request.job_description.strip()
-    if len(job_description) < 10:
-        raise HTTPException(status_code=400, detail="job_description is too short")
-    if client is None:
-        raise HTTPException(status_code=503, detail="OpenAI API key is not configured")
-    job_description = job_description[:MAX_JOB_DESCRIPTION_LENGTH]
-
+def analyze_job_uncached(job_description, include_rag=False):
     extract_prompt = f"""
     Extract the top 5 skills, tools, domain requirements, qualifications, or experience requirements from this employer job listing text.
     Use only employer job requirements, responsibilities, qualifications, and required tools.
@@ -355,9 +548,40 @@ async def analyze_job(request: JobRequest):
         "explanation": "Matched skills are based only on extracted employer responsibilities, requirements, qualifications, and required tools. No user profile skills were provided to calculate personal missing skills.",
     }
 
-    if request.include_rag:
+    if include_rag:
         response_payload["rag_recommendation"] = build_rag_recommendation(final_results)
 
+    return response_payload
+
+
+@app.post("/analyze-job")
+async def analyze_job(request: JobRequest):
+    job_description = request.job_description.strip()
+    if len(job_description) < 10:
+        raise HTTPException(status_code=400, detail="job_description is too short")
+    if skill_index_error:
+        raise HTTPException(status_code=503, detail=skill_index_error)
+    if client is None:
+        raise HTTPException(status_code=503, detail="OpenAI API key is not configured")
+    job_description = job_description[:MAX_JOB_DESCRIPTION_LENGTH]
+    content_hash = hashlib.sha256(job_description.encode("utf-8")).hexdigest()
+    cache_key = (content_hash, bool(request.include_rag))
+    cached = job_analysis_cache.get(cache_key)
+    if cached is not None:
+        cached["cache_status"] = "hit"
+        return cached
+
+    try:
+        response_payload = await run_with_timeout(
+            analyze_job_uncached,
+            job_description,
+            request.include_rag,
+            timeout_seconds=settings.API_REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Job analysis timed out. Try again.") from exc
+    job_analysis_cache.set(cache_key, response_payload)
+    response_payload["cache_status"] = "miss"
     return response_payload
 
 
@@ -368,78 +592,117 @@ async def api_career_roles():
 
 @app.get("/api/courses")
 async def api_courses(
-    keyword: str | None = None,
-    skill: str | None = None,
-    provider: str | None = None,
-    delivery_mode: str | None = None,
-    category: str | None = None,
+    keyword: str | None = Query(default=None, max_length=160),
+    skill: str | None = Query(default=None, max_length=120),
+    provider: str | None = Query(default=None, max_length=160),
+    delivery_mode: str | None = Query(default=None, max_length=80),
+    category: str | None = Query(default=None, max_length=120),
     active_upcoming_runs: bool = False,
+    page: int = Query(default=1, ge=1, le=100_000),
+    page_size: int = Query(default=20, ge=1, le=100),
 ):
+    filters = {
+        "keyword": keyword,
+        "skill": skill,
+        "provider": provider,
+        "delivery_mode": delivery_mode,
+        "category": category,
+        "active_upcoming_runs": active_upcoming_runs,
+    }
+    total = count_courses(**filters)
     return {
         "courses": list_courses(
-            keyword=keyword,
-            skill=skill,
-            provider=provider,
-            delivery_mode=delivery_mode,
-            category=category,
-            active_upcoming_runs=active_upcoming_runs,
+            **filters,
+            limit=page_size,
+            offset=(page - 1) * page_size,
         ),
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": math.ceil(total / page_size) if total else 0,
+        },
         "attribution": "Course data is imported from local SkillsFuture dataset files. Verify current details with SkillsFuture Singapore. This product is not operated, endorsed, or certified by SSG or the Singapore Government.",
     }
 
 
 @app.post("/api/recommendations/courses")
 async def api_semantic_course_recommendations(request: SemanticCourseRecommendationRequest):
-    if not course_index.ready:
-        raise HTTPException(
-            status_code=503,
-            detail="Course semantic index is not built. Run precompute_course_embeddings.py.",
-        )
+    index_status = require_course_index()
 
     skills = normalize_extracted_skills(request.skills)
     if not skills:
         raise HTTPException(status_code=400, detail="At least one usable skill is required")
 
-    query_embeddings = embedding_model.encode(
-        skills,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    )
-    recommendations = course_index.search(
-        query_embeddings=query_embeddings,
-        skills=skills,
-        limit=request.limit,
-        available_credit=request.available_credit,
-        max_budget=request.max_budget,
-        maximum_duration_hours=request.maximum_duration_hours,
-        require_upcoming_run=request.require_upcoming_run,
-    )
+    try:
+        query_embeddings, cache_hit = await run_with_timeout(
+            get_query_embeddings,
+            skills,
+            timeout_seconds=settings.API_REQUEST_TIMEOUT_SECONDS,
+        )
+        recommendations = await run_with_timeout(
+            course_index.search,
+            query_embeddings=query_embeddings,
+            skills=skills,
+            limit=request.limit,
+            available_credit=request.available_credit,
+            max_budget=request.max_budget,
+            maximum_duration_hours=request.maximum_duration_hours,
+            require_upcoming_run=request.require_upcoming_run,
+            timeout_seconds=settings.API_REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Course recommendation timed out. Try again.") from exc
     return {
         "skills": skills,
         "recommendations": recommendations,
         "index_model": course_index.model_name,
+        "index_status": index_status,
+        "embedding_cache_status": "hit" if cache_hit else "miss",
         "attribution": "Recommendations use local semantic retrieval over imported course data. Verify current course details and funding eligibility with SkillsFuture Singapore.",
     }
 
 
 @app.post("/api/recommendations/learning-pathway")
 async def api_actionable_learning_pathway(request: ActionablePathwayRequest):
-    if not course_index.ready:
-        raise HTTPException(
-            status_code=503,
-            detail="Course semantic index is not built. Run precompute_course_embeddings.py.",
-        )
+    index_status = require_course_index()
 
-    pathway = build_actionable_pathway(
-        course_index=course_index,
-        embedding_model=embedding_model,
-        skill_gaps=[item.model_dump() for item in request.skill_gaps],
-        available_credit=request.available_credit,
-        monthly_hours=request.monthly_hours,
-        maximum_duration_hours=request.maximum_duration_hours,
-    )
+    try:
+        pathway = await run_with_timeout(
+            build_actionable_pathway,
+            course_index=course_index,
+            embedding_model=cached_embedding_model,
+            skill_gaps=[item.model_dump() for item in request.skill_gaps],
+            available_credit=request.available_credit,
+            monthly_hours=request.monthly_hours,
+            maximum_duration_hours=request.maximum_duration_hours,
+            timeout_seconds=settings.API_REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Pathway generation timed out. Try again.") from exc
+    if request.include_narrative:
+        try:
+            narrative = await run_with_timeout(
+                generate_grounded_pathway_narrative,
+                client=client,
+                model=OPENAI_MODEL,
+                pathway=pathway,
+                target_role=request.target_role,
+                timeout_seconds=settings.API_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            narrative = generate_grounded_pathway_narrative(
+                client=None,
+                model=OPENAI_MODEL,
+                pathway=pathway,
+                target_role=request.target_role,
+            )
+    else:
+        narrative = None
     return {
         **pathway,
+        "narrative": narrative,
+        "index_status": index_status,
         "attribution": "Pathway stages use local semantic retrieval, self-reported proficiency gaps, and deterministic fee and credit calculations.",
     }
 
@@ -469,7 +732,7 @@ async def api_course_pathway(request: CoursePathwayRequest):
     }
     result = recommend_course_pathway(
         target_role_id=request.target_role_id,
-        user_skills=request.user_skills,
+        user_skills=[item.model_dump() for item in request.user_skills],
         constraints=constraints,
     )
     if not result:
@@ -480,6 +743,16 @@ async def api_course_pathway(request: CoursePathwayRequest):
 @app.post("/api/recommendations/feedback")
 async def api_recommendation_feedback(request: RecommendationFeedbackRequest):
     with connect() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM courses WHERE id = ? AND is_active = 1",
+            (request.course_id,),
+        ).fetchone():
+            raise HTTPException(status_code=404, detail="Course not found")
+        if request.target_role_id is not None and not conn.execute(
+            "SELECT 1 FROM career_roles WHERE id = ? AND is_active = 1",
+            (request.target_role_id,),
+        ).fetchone():
+            raise HTTPException(status_code=404, detail="Target role not found")
         conn.execute(
             """
             INSERT INTO recommendation_feedback (
@@ -487,7 +760,7 @@ async def api_recommendation_feedback(request: RecommendationFeedbackRequest):
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
-                request.user_id,
+                "local-user",
                 request.course_id,
                 request.target_role_id,
                 request.feedback_type,

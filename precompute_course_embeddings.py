@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime, timezone
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -18,7 +19,7 @@ def load_courses():
             dict(row)
             for row in conn.execute(
                 """
-                SELECT id, title, description, objectives, category, level
+                SELECT id, title, description, objectives, category, level, updated_at
                 FROM courses
                 WHERE is_active = 1
                 ORDER BY id
@@ -49,6 +50,10 @@ def main():
         convert_to_numpy=True,
     ).astype(np.float32, copy=False)
     course_ids = np.asarray([course["id"] for course in courses], dtype=np.int64)
+    source_max_updated_at = max(
+        (str(course.get("updated_at") or "") for course in courses),
+        default="",
+    )
 
     target = settings.COURSE_EMBEDDINGS_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +62,9 @@ def main():
         course_ids=course_ids,
         embeddings=embeddings,
         model_name=np.asarray(args.model),
+        generated_at=np.asarray(datetime.now(timezone.utc).isoformat()),
+        source_course_count=np.asarray(len(course_ids), dtype=np.int64),
+        source_max_updated_at=np.asarray(source_max_updated_at),
     )
     print(f"Saved {len(course_ids)} course embeddings to {target}")
 

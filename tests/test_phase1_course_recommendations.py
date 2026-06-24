@@ -8,6 +8,7 @@ import pandas as pd
 
 from course_semantic_search import CourseSemanticIndex
 from learning_pathway import build_actionable_pathway
+from pathway_narrative import generate_grounded_pathway_narrative
 from skillsfuture_sync import SchemaDriftError, load_local_dataset, normalize_column
 from skillsfuture_db import initialize_database, connect, get_or_create_skill, json_dumps, utc_now
 import skillsfuture_config as settings
@@ -177,6 +178,10 @@ class Phase1Tests(unittest.TestCase):
                 self.assertEqual(len(recommendations), 1)
                 self.assertEqual(recommendations[0]["course"]["title"], "Python for Data Analysis")
                 self.assertTrue(recommendations[0]["has_upcoming_run"])
+                self.assertEqual(
+                    recommendations[0]["course"]["upcoming_runs"][0]["external_run_id"],
+                    "RUN-PY1",
+                )
                 self.assertEqual(recommendations[0]["estimated_fee"], 400)
             finally:
                 settings.COURSE_DB_PATH = old_path
@@ -270,6 +275,95 @@ class Phase1Tests(unittest.TestCase):
             "Already Proficient",
             [item["skill"] for item in pathway["prioritized_skill_gaps"]],
         )
+
+    def test_grounded_narrative_accepts_only_selected_course_ids(self):
+        pathway = {
+            "summary": "Two-stage pathway.",
+            "prioritized_skill_gaps": [
+                {"skill": "Python", "current_level": 1, "gap": 2},
+            ],
+            "stages": [
+                {
+                    "stage": 1,
+                    "stage_label": "Foundation",
+                    "skill_gap": {"skill": "Python", "current_level": 1, "gap": 2},
+                    "course": {"id": 42, "title": "Python Foundations"},
+                    "semantic_score": 0.8,
+                    "confidence_label": "Strong match",
+                    "has_upcoming_run": True,
+                    "estimated_fee": 300,
+                    "credit_used": 300,
+                    "cash_required": 0,
+                    "duration_hours": 20,
+                    "why_this_stage": "Largest gap.",
+                    "why_this_course": "Strong dataset match.",
+                    "practical_action": "Complete exercises.",
+                    "measurable_outcome": "Publish one notebook.",
+                },
+            ],
+            "totals": {"estimated_fee": 300},
+            "assumptions": [],
+        }
+
+        class FakeResponse:
+            class Choice:
+                class Message:
+                    content = json_dumps({
+                        "overview": "Build Python foundations first.",
+                        "priority_summary": ["Python is the largest gap."],
+                        "stage_guidance": [{
+                            "stage": 1,
+                            "course_id": 42,
+                            "skill": "Python",
+                            "guidance": "Start with the selected foundation course.",
+                            "action": "Complete one notebook.",
+                            "outcome": "Publish the notebook for review.",
+                        }],
+                        "next_step": "Add the course to the planner.",
+                    })
+
+                message = Message()
+
+            choices = [Choice()]
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                return FakeResponse()
+
+        class FakeClient:
+            class Chat:
+                completions = FakeCompletions()
+
+            chat = Chat()
+
+        narrative = generate_grounded_pathway_narrative(
+            client=FakeClient(),
+            model="test-model",
+            pathway=pathway,
+        )
+        self.assertEqual(narrative["source"], "llm")
+        self.assertEqual(narrative["stage_guidance"][0]["course_id"], 42)
+
+        FakeResponse.Choice.Message.content = json_dumps({
+            "overview": "Invented plan.",
+            "priority_summary": [],
+            "stage_guidance": [{
+                "stage": 1,
+                "course_id": 999,
+                "skill": "Python",
+                "guidance": "Use an invented course.",
+                "action": "Do something.",
+                "outcome": "Something happens.",
+            }],
+            "next_step": "Continue.",
+        })
+        fallback = generate_grounded_pathway_narrative(
+            client=FakeClient(),
+            model="test-model",
+            pathway=pathway,
+        )
+        self.assertEqual(fallback["source"], "deterministic")
+        self.assertEqual(fallback["stage_guidance"][0]["course_id"], 42)
 
 
 if __name__ == "__main__":

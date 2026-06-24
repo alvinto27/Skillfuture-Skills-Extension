@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "SkillsFuture Analyzer Hook",
-  "version": "0.7.0",
-  "description": "Builds a gap-based SkillsFuture course pathway with credit and action planning.",
+  "version": "1.0.0",
+  "description": "Plans, compares, and tracks grounded SkillsFuture learning pathways.",
   "permissions": ["storage"],
   "host_permissions": [
     "http://localhost:8000/*",

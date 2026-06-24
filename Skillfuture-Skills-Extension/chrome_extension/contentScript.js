@@ -9,6 +9,8 @@
   const MAX_JOB_DESCRIPTION_LENGTH = 12000;
   const HISTORY_STORAGE_KEY = "skillsfuture_analysis_history";
   const HISTORY_LIMIT = 10;
+  const DEFAULT_RETRY_COUNT = 1;
+  const DEFAULT_TIMEOUT_SECONDS = 45;
   let watchedUrl = window.location.href;
 
   const TARGET_JOB_HEADINGS = [
@@ -813,6 +815,26 @@
     return DEFAULT_BACKEND_URL;
   }
 
+  async function getNetworkSettings() {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      try {
+        const value = await chrome.storage.local.get(["apiAccessToken", "retryCount", "timeoutSeconds"]);
+        return {
+          apiAccessToken: String(value.apiAccessToken || ""),
+          retries: Math.min(Math.max(Number(value.retryCount ?? DEFAULT_RETRY_COUNT), 0), 3),
+          timeoutSeconds: Math.min(Math.max(Number(value.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS), 5), 120)
+        };
+      } catch (error) {
+        debugLog("Could not read network settings", error);
+      }
+    }
+    return {
+      apiAccessToken: "",
+      retries: DEFAULT_RETRY_COUNT,
+      timeoutSeconds: DEFAULT_TIMEOUT_SECONDS
+    };
+  }
+
   function readPageBackendUrl() {
     return new Promise((resolve) => {
       const eventName = `skillsfuture-backend-url-${Math.random().toString(36).slice(2)}`;
@@ -844,25 +866,50 @@
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
-  async function postWithRetry(url, payload, retries = 1) {
+  async function postWithRetry(
+    url,
+    payload,
+    retries = DEFAULT_RETRY_COUNT,
+    timeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
+    apiAccessToken = ""
+  ) {
     let lastError;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), timeoutSeconds * 1000);
       try {
         const response = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiAccessToken
+              ? { Authorization: `Bearer ${apiAccessToken}` }
+              : {})
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
         });
 
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(data.detail || `${response.status} ${response.statusText}`);
+          const error = new Error(data.detail || `${response.status} ${response.statusText}`);
+          error.status = response.status;
+          throw error;
         }
         return { data, status: response.status };
       } catch (error) {
-        lastError = error;
-        if (attempt < retries) await delay(500);
+        lastError = error.name === "AbortError"
+          ? new Error(`Request timed out after ${timeoutSeconds} seconds`)
+          : error;
+        const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
+        if (attempt < retries && retryable) {
+          await delay(500 * (attempt + 1));
+          continue;
+        }
+        break;
+      } finally {
+        window.clearTimeout(timeout);
       }
     }
 
@@ -899,11 +946,18 @@
       include_rag: true
     };
     const backendUrl = await getStoredBackendUrl();
+    const networkSettings = await getNetworkSettings();
     showModal({ loading: true });
 
     try {
       if (button) button.textContent = "Analyzing...";
-      const result = await postWithRetry(backendUrl, payload, 1);
+      const result = await postWithRetry(
+        backendUrl,
+        payload,
+        networkSettings.retries,
+        networkSettings.timeoutSeconds,
+        networkSettings.apiAccessToken
+      );
       const data = result.data;
       console.log("SkillsFuture analysis result:", data);
       debugLog("Extraction diagnostics", {
@@ -928,7 +982,9 @@
       showModal({ data, notice });
     } catch (error) {
       console.error("Failed to call SkillsFuture backend", error);
-      showModal({ error: `Failed to contact backend: ${error.message}` });
+      showModal({
+        error: `Backend unavailable: ${error.message}. Confirm FastAPI is running, then retry.`
+      });
     } finally {
       if (button) button.textContent = "Analyze with SkillsFuture";
     }
@@ -999,6 +1055,17 @@
           border-radius: 6px;
           padding: 10px;
         }
+        .retry-button {
+          min-height: 34px;
+          margin-top: 10px;
+          border: 1px solid #99f6e4;
+          border-radius: 6px;
+          background: #f0fdfa;
+          color: #115e59;
+          cursor: pointer;
+          font: 800 12px/1 Arial, sans-serif;
+          padding: 0 11px;
+        }
         .skill {
           border-top: 1px solid #e5e7eb;
           padding: 11px 0;
@@ -1037,6 +1104,12 @@
       paragraph.className = "error";
       paragraph.textContent = error;
       body.appendChild(paragraph);
+      const retryButton = document.createElement("button");
+      retryButton.className = "retry-button";
+      retryButton.type = "button";
+      retryButton.textContent = "Retry analysis";
+      retryButton.addEventListener("click", onAnalyzeClicked);
+      body.appendChild(retryButton);
     } else {
       legacyRenderResults(body, data);
     }
@@ -1350,6 +1423,17 @@
           border: 1px solid #fecaca;
           border-radius: 6px;
           padding: 12px;
+        }
+        .retry-button {
+          min-height: 34px;
+          margin-top: 10px;
+          border: 1px solid #99f6e4;
+          border-radius: 6px;
+          background: #f0fdfa;
+          color: #115e59;
+          cursor: pointer;
+          font: 800 12px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+          padding: 0 11px;
         }
         .notice {
           margin: 0 0 14px;
@@ -1749,6 +1833,12 @@
       paragraph.className = "error";
       paragraph.textContent = error;
       body.appendChild(paragraph);
+      const retryButton = document.createElement("button");
+      retryButton.className = "retry-button";
+      retryButton.type = "button";
+      retryButton.textContent = "Retry analysis";
+      retryButton.addEventListener("click", onAnalyzeClicked);
+      body.appendChild(retryButton);
     } else if (loading && !data) {
       const appendLine = (container, className) => {
         const line = document.createElement("span");

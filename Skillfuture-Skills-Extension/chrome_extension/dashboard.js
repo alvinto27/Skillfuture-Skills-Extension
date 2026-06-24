@@ -1,6 +1,8 @@
 const HISTORY_STORAGE_KEY = "skillsfuture_analysis_history";
 const PLANNER_STORAGE_KEY = "skillsfuture_course_planner";
 const DEFAULT_BACKEND_URL = "http://localhost:8000/analyze-job";
+const DEFAULT_RETRY_COUNT = 1;
+const DEFAULT_TIMEOUT_SECONDS = 45;
 
 const state = {
   backendBaseUrl: "http://localhost:8000",
@@ -10,7 +12,15 @@ const state = {
     creditBalance: 500,
     monthlyHours: 20
   },
+  network: {
+    apiAccessToken: "",
+    retries: DEFAULT_RETRY_COUNT,
+    timeoutSeconds: DEFAULT_TIMEOUT_SECONDS
+  },
   plan: [],
+  comparison: [],
+  feedback: {},
+  pathwayOrder: {},
   skillLevels: {},
   searchResults: [],
   recommendations: [],
@@ -22,6 +32,7 @@ const state = {
 const elements = {
   connectionStatus: document.getElementById("connectionStatus"),
   connectionText: document.getElementById("connectionText"),
+  retryConnection: document.getElementById("retryConnection"),
   creditMetric: document.getElementById("creditMetric"),
   creditNote: document.getElementById("creditNote"),
   feeMetric: document.getElementById("feeMetric"),
@@ -43,11 +54,19 @@ const elements = {
   refreshRecommendations: document.getElementById("refreshRecommendations"),
   pathwayContent: document.getElementById("pathwayContent"),
   refreshPathway: document.getElementById("refreshPathway"),
+  generateNarrative: document.getElementById("generateNarrative"),
   jobSelect: document.getElementById("jobSelect"),
   jobContextMessage: document.getElementById("jobContextMessage"),
   focusSkills: document.getElementById("focusSkills"),
   planList: document.getElementById("planList"),
-  clearPlan: document.getElementById("clearPlan")
+  clearPlan: document.getElementById("clearPlan"),
+  comparisonPanel: document.getElementById("comparisonPanel"),
+  comparisonContent: document.getElementById("comparisonContent"),
+  clearComparison: document.getElementById("clearComparison"),
+  progressFill: document.getElementById("progressFill"),
+  progressText: document.getElementById("progressText"),
+  exportCalendar: document.getElementById("exportCalendar"),
+  printPlan: document.getElementById("printPlan")
 };
 
 function normalizeText(value) {
@@ -113,6 +132,55 @@ function getDeliveryLabel(course) {
   return Array.isArray(modes) && modes.length ? normalizeText(modes[0]) : "";
 }
 
+function getUpcomingRuns(course) {
+  const runs = Array.isArray(course && course.runs)
+    ? course.runs
+    : (Array.isArray(course && course.upcoming_runs) ? course.upcoming_runs : []);
+  const today = new Date().toISOString().slice(0, 10);
+  return runs
+    .filter((run) => !run.start_date || run.start_date >= today)
+    .sort((left, right) => String(left.start_date || "").localeCompare(String(right.start_date || "")))
+    .slice(0, 10);
+}
+
+function formatDate(value) {
+  if (!value) return "Date not listed";
+  const date = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : new Intl.DateTimeFormat("en-SG", { day: "numeric", month: "short", year: "numeric" }).format(date);
+}
+
+function getSelectedRun(item) {
+  const runs = getUpcomingRuns(item.course);
+  return runs.find((run) => String(run.id) === String(item.selectedRunId)) || runs[0] || null;
+}
+
+function getPlanDateRange(item) {
+  const run = getSelectedRun(item);
+  const start = run && run.start_date ? run.start_date : item.plannedStart;
+  const end = run && run.end_date ? run.end_date : start;
+  return start ? { start: String(start).slice(0, 10), end: String(end || start).slice(0, 10) } : null;
+}
+
+function getScheduleConflicts() {
+  const conflicts = new Map();
+  state.plan.forEach((left, leftIndex) => {
+    const leftRange = getPlanDateRange(left);
+    if (!leftRange) return;
+    state.plan.slice(leftIndex + 1).forEach((right, offset) => {
+      const rightIndex = leftIndex + offset + 1;
+      const rightRange = getPlanDateRange(right);
+      if (!rightRange) return;
+      if (leftRange.start <= rightRange.end && rightRange.start <= leftRange.end) {
+        conflicts.set(leftIndex, right.course.title);
+        conflicts.set(rightIndex, left.course.title);
+      }
+    });
+  });
+  return conflicts;
+}
+
 function deriveBackendBase(url) {
   const normalized = String(url || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, "");
   return normalized.replace(/\/analyze-job$/i, "");
@@ -158,16 +226,28 @@ function getTopMatch(result) {
   return matches[0] || null;
 }
 
-function getFocusSkills(item) {
+function getFocusSkillItems(item) {
   const results = Array.isArray(item && item.data && item.data.results) ? item.data.results : [];
-  return results
+  const items = results
     .map((result) => {
       const match = getTopMatch(result);
-      return normalizeText(match && match.official_skill_title) || normalizeText(result.extracted_skill);
+      const skill = normalizeText(match && match.official_skill_title) || normalizeText(result.extracted_skill);
+      return {
+        skill,
+        jobSkill: normalizeText(result.extracted_skill),
+        sourceEvidence: normalizeText(result.source_evidence)
+      };
     })
-    .filter(Boolean)
-    .filter((skill, index, all) => all.indexOf(skill) === index)
+    .filter((item) => item.skill);
+  return items
+    .filter((item, index, all) => (
+      all.findIndex((candidate) => getSkillKey(candidate.skill) === getSkillKey(item.skill)) === index
+    ))
     .slice(0, 10);
+}
+
+function getFocusSkills(item) {
+  return getFocusSkillItems(item).map((item) => item.skill);
 }
 
 function getSkillKey(skill) {
@@ -193,11 +273,13 @@ function getSelectedJob() {
 }
 
 function getSkillGaps(item = getSelectedJob()) {
-  return getFocusSkills(item)
-    .map((skill) => {
-      const currentLevel = getSkillLevel(skill);
+  return getFocusSkillItems(item)
+    .map((skillItem) => {
+      const currentLevel = getSkillLevel(skillItem.skill);
       return {
-        skill,
+        skill: skillItem.skill,
+        jobSkill: skillItem.jobSkill,
+        sourceEvidence: skillItem.sourceEvidence,
         currentLevel,
         currentLevelLabel: getSkillLevelLabel(currentLevel),
         gap: Math.max(3 - currentLevel, 0)
@@ -244,6 +326,9 @@ async function savePlanner() {
     [PLANNER_STORAGE_KEY]: {
       settings: state.settings,
       plan: state.plan,
+      comparison: state.comparison,
+      feedback: state.feedback,
+      pathwayOrder: state.pathwayOrder,
       skillLevels: state.skillLevels
     }
   });
@@ -278,6 +363,92 @@ function renderSummary() {
     ? `About ${months < 1 ? "<1" : Math.ceil(months)} month${Math.ceil(months) === 1 ? "" : "s"} at your pace`
     : "No courses planned";
   elements.clearPlan.disabled = state.plan.length === 0;
+  elements.exportCalendar.disabled = state.plan.length === 0;
+  elements.printPlan.disabled = state.plan.length === 0;
+  const completed = state.plan.filter((item) => item.status === "completed").length;
+  const progress = state.plan.length ? Math.round((completed / state.plan.length) * 100) : 0;
+  elements.progressFill.style.width = `${progress}%`;
+  elements.progressText.textContent = state.plan.length
+    ? `${completed} of ${state.plan.length} courses completed (${progress}%)`
+    : "No courses planned";
+}
+
+async function loadCourseDetails(course) {
+  if (Array.isArray(course.runs)) return course;
+  try {
+    const data = await fetchJson(`${state.backendBaseUrl}/api/courses/${course.id}`);
+    return data && data.course ? data.course : course;
+  } catch (error) {
+    return course;
+  }
+}
+
+async function toggleComparison(course) {
+  const existingIndex = state.comparison.findIndex((item) => item.id === course.id);
+  if (existingIndex >= 0) {
+    state.comparison.splice(existingIndex, 1);
+  } else {
+    if (state.comparison.length >= 3) state.comparison.shift();
+    state.comparison.push(await loadCourseDetails(course));
+  }
+  await savePlanner();
+  renderComparison();
+  renderCourseResults();
+  renderRecommendations();
+}
+
+function renderComparison() {
+  clearElement(elements.comparisonContent);
+  elements.comparisonPanel.hidden = state.comparison.length === 0;
+  if (!state.comparison.length) return;
+
+  const table = document.createElement("table");
+  table.className = "comparison-table";
+  const caption = document.createElement("caption");
+  caption.className = "visually-hidden";
+  caption.textContent = "Comparison of selected SkillsFuture courses";
+  table.appendChild(caption);
+
+  const body = document.createElement("tbody");
+  const rows = [
+    ["Course", (course) => course.title || "Untitled course"],
+    ["Provider", (course) => course.provider_name || "Not listed"],
+    ["Estimated fee", (course) => formatMoney(getCourseFee(course))],
+    ["Duration", (course) => `${getCourseHours(course) || 0} hours`],
+    ["Delivery", (course) => getDeliveryLabel(course) || "Not listed"],
+    ["Next run", (course) => formatDate(getUpcomingRuns(course)[0]?.start_date)]
+  ];
+  rows.forEach(([label, value]) => {
+    const row = document.createElement("tr");
+    const heading = document.createElement("th");
+    heading.scope = "row";
+    heading.textContent = label;
+    row.appendChild(heading);
+    state.comparison.forEach((course) => {
+      const cell = document.createElement("td");
+      cell.textContent = value(course);
+      row.appendChild(cell);
+    });
+    body.appendChild(row);
+  });
+  table.appendChild(body);
+  elements.comparisonContent.appendChild(table);
+}
+
+async function submitFeedback(courseId, feedbackType) {
+  const key = String(courseId);
+  try {
+    await postJson(`${state.backendBaseUrl}/api/recommendations/feedback`, {
+      course_id: courseId,
+      feedback_type: feedbackType
+    });
+    state.feedback[key] = feedbackType;
+    await savePlanner();
+    renderRecommendations();
+  } catch (error) {
+    state.feedback[key] = "error";
+    renderRecommendations();
+  }
 }
 
 function createCourseCard(course, recommendation = null) {
@@ -296,6 +467,16 @@ function createCourseCard(course, recommendation = null) {
     provider.textContent = course.provider_name || "Provider not listed";
     copy.append(title, provider);
 
+    const actions = document.createElement("div");
+    actions.className = "card-actions";
+    const compareButton = document.createElement("button");
+    const compared = state.comparison.some((item) => item.id === course.id);
+    compareButton.className = compared ? "button small active" : "button small";
+    compareButton.type = "button";
+    compareButton.textContent = compared ? "Comparing" : "Compare";
+    compareButton.setAttribute("aria-pressed", String(compared));
+    compareButton.addEventListener("click", () => toggleComparison(course));
+
     const addButton = document.createElement("button");
     const alreadyPlanned = state.plan.some((item) => item.course.id === course.id);
     addButton.className = "button small primary";
@@ -303,7 +484,8 @@ function createCourseCard(course, recommendation = null) {
     addButton.disabled = alreadyPlanned;
     addButton.textContent = alreadyPlanned ? "Added" : "Add to plan";
     addButton.addEventListener("click", () => addCourseToPlan(course));
-    head.append(copy, addButton);
+    actions.append(compareButton, addButton);
+    head.append(copy, actions);
 
     const meta = document.createElement("div");
     meta.className = "course-meta";
@@ -354,11 +536,33 @@ function createCourseCard(course, recommendation = null) {
 
     card.append(head, meta);
 
+    const nextRun = getUpcomingRuns(course)[0];
+    if (nextRun) {
+      const runNote = document.createElement("p");
+      runNote.className = "run-note";
+      runNote.textContent = `Next run: ${formatDate(nextRun.start_date)}${nextRun.delivery_mode ? `, ${nextRun.delivery_mode}` : ""}`;
+      card.appendChild(runNote);
+    }
+
     if (recommendation && recommendation.explanation) {
       const reason = document.createElement("p");
       reason.className = "recommendation-reason";
       reason.textContent = recommendation.explanation;
       card.appendChild(reason);
+
+      const feedback = document.createElement("div");
+      feedback.className = "feedback-actions";
+      const currentFeedback = state.feedback[String(course.id)];
+      ["relevant", "not_relevant"].forEach((type) => {
+        const button = document.createElement("button");
+        button.className = currentFeedback === type ? "button small active" : "button small";
+        button.type = "button";
+        button.textContent = type === "relevant" ? "Relevant" : "Not relevant";
+        button.setAttribute("aria-pressed", String(currentFeedback === type));
+        button.addEventListener("click", () => submitFeedback(course.id, type));
+        feedback.appendChild(button);
+      });
+      card.appendChild(feedback);
     }
 
     return card;
@@ -416,12 +620,39 @@ function createPathwayTotal(label, value) {
   return item;
 }
 
-function renderPathway() {
-  clearElement(elements.pathwayContent);
-  const gaps = getSkillGaps();
+function getPathwayOrderKey() {
+  return state.selectedJobId || "default";
+}
+
+function getOrderedPathwayStages() {
   const stages = Array.isArray(state.pathway && state.pathway.stages)
     ? state.pathway.stages
     : [];
+  const savedOrder = state.pathwayOrder[getPathwayOrderKey()] || [];
+  const rank = new Map(savedOrder.map((courseId, index) => [Number(courseId), index]));
+  return [...stages].sort((left, right) => {
+    const leftRank = rank.has(Number(left.course.id)) ? rank.get(Number(left.course.id)) : left.stage + 100;
+    const rightRank = rank.has(Number(right.course.id)) ? rank.get(Number(right.course.id)) : right.stage + 100;
+    return leftRank - rightRank;
+  });
+}
+
+async function movePathwayStage(courseId, direction) {
+  const stages = getOrderedPathwayStages();
+  const ids = stages.map((stage) => Number(stage.course.id));
+  const index = ids.indexOf(Number(courseId));
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= ids.length) return;
+  [ids[index], ids[target]] = [ids[target], ids[index]];
+  state.pathwayOrder[getPathwayOrderKey()] = ids;
+  await savePlanner();
+  renderPathway();
+}
+
+function renderPathway() {
+  clearElement(elements.pathwayContent);
+  const gaps = getSkillGaps();
+  const stages = getOrderedPathwayStages();
 
   if (!gaps.length) {
     elements.pathwayContent.appendChild(
@@ -434,6 +665,41 @@ function renderPathway() {
       createMessage("No pathway loaded for the current skill gaps.")
     );
     return;
+  }
+
+  const narrative = state.pathway.narrative;
+  const guidanceByCourse = new Map(
+    (narrative && Array.isArray(narrative.stage_guidance) ? narrative.stage_guidance : [])
+      .map((item) => [Number(item.course_id), item])
+  );
+  if (narrative) {
+    const narrativePanel = document.createElement("section");
+    narrativePanel.className = "narrative-panel";
+    const source = document.createElement("span");
+    source.className = "narrative-source";
+    source.textContent = narrative.source === "llm" ? "Grounded AI plan" : "Verified fallback plan";
+    const overview = document.createElement("p");
+    overview.textContent = narrative.overview;
+    narrativePanel.append(source, overview);
+
+    if (Array.isArray(narrative.priority_summary) && narrative.priority_summary.length) {
+      const priorities = document.createElement("ul");
+      priorities.className = "narrative-priorities";
+      narrative.priority_summary.forEach((item) => {
+        const priority = document.createElement("li");
+        priority.textContent = item;
+        priorities.appendChild(priority);
+      });
+      narrativePanel.appendChild(priorities);
+    }
+    if (narrative.next_step) {
+      const nextStep = document.createElement("p");
+      const nextStepLabel = document.createElement("strong");
+      nextStepLabel.textContent = "Next step: ";
+      nextStep.append(nextStepLabel, narrative.next_step);
+      narrativePanel.appendChild(nextStep);
+    }
+    elements.pathwayContent.appendChild(narrativePanel);
   }
 
   const totals = state.pathway.totals || {};
@@ -449,16 +715,37 @@ function renderPathway() {
 
   const list = document.createElement("div");
   list.className = "pathway-list";
-  stages.forEach((stage) => {
+  stages.forEach((stage, stageIndex) => {
+    const narrativeStage = guidanceByCourse.get(Number(stage.course.id));
     const row = document.createElement("article");
     row.className = "pathway-stage";
     const number = document.createElement("span");
     number.className = "pathway-number";
-    number.textContent = String(stage.stage);
+    number.textContent = String(stageIndex + 1);
 
     const content = document.createElement("div");
+    const stageHeader = document.createElement("div");
+    stageHeader.className = "pathway-stage-header";
     const heading = document.createElement("h3");
     heading.textContent = `${stage.stage_label}: ${stage.title}`;
+    const orderActions = document.createElement("div");
+    orderActions.className = "pathway-order-actions";
+    const upButton = document.createElement("button");
+    upButton.className = "button small";
+    upButton.type = "button";
+    upButton.textContent = "Move up";
+    upButton.disabled = stageIndex === 0;
+    upButton.setAttribute("aria-label", `Move ${stage.course.title} earlier`);
+    upButton.addEventListener("click", () => movePathwayStage(stage.course.id, -1));
+    const downButton = document.createElement("button");
+    downButton.className = "button small";
+    downButton.type = "button";
+    downButton.textContent = "Move down";
+    downButton.disabled = stageIndex === stages.length - 1;
+    downButton.setAttribute("aria-label", `Move ${stage.course.title} later`);
+    downButton.addEventListener("click", () => movePathwayStage(stage.course.id, 1));
+    orderActions.append(upButton, downButton);
+    stageHeader.append(heading, orderActions);
     const reason = document.createElement("p");
     reason.textContent = stage.why_this_stage;
 
@@ -479,15 +766,25 @@ function renderPathway() {
 
     const rationale = document.createElement("p");
     rationale.textContent = stage.why_this_course;
+    if (narrativeStage && narrativeStage.guidance) {
+      const guidance = document.createElement("p");
+      guidance.className = "pathway-guidance";
+      guidance.textContent = narrativeStage.guidance;
+      course.appendChild(guidance);
+    }
     const action = document.createElement("p");
     const actionLabel = document.createElement("strong");
     actionLabel.textContent = "Action: ";
-    action.append(actionLabel, stage.practical_action);
+    action.append(actionLabel, narrativeStage && narrativeStage.action
+      ? narrativeStage.action
+      : stage.practical_action);
     const outcome = document.createElement("p");
     outcome.className = "pathway-outcome";
     const outcomeLabel = document.createElement("strong");
     outcomeLabel.textContent = "Outcome: ";
-    outcome.append(outcomeLabel, stage.measurable_outcome);
+    outcome.append(outcomeLabel, narrativeStage && narrativeStage.outcome
+      ? narrativeStage.outcome
+      : stage.measurable_outcome);
 
     const meta = document.createElement("div");
     meta.className = "course-meta";
@@ -503,7 +800,8 @@ function renderPathway() {
       meta.appendChild(tag);
     });
 
-    course.append(courseHead, rationale, action, outcome, meta);
+    course.prepend(courseHead, rationale);
+    course.append(action, outcome, meta);
     if (stage.alternative && stage.alternative.course) {
       const alternative = document.createElement("div");
       alternative.className = "pathway-alternative";
@@ -525,7 +823,7 @@ function renderPathway() {
       course.appendChild(alternative);
     }
 
-    content.append(heading, reason, course);
+    content.append(stageHeader, reason, course);
     row.append(number, content);
     list.appendChild(row);
   });
@@ -535,6 +833,7 @@ function renderPathway() {
 function renderPlan() {
   clearElement(elements.planList);
   const summary = getPlanSummary();
+  const conflicts = getScheduleConflicts();
 
   if (!state.plan.length) {
     elements.planList.appendChild(
@@ -588,6 +887,32 @@ function renderPlan() {
     });
     statusField.append(statusLabel, status);
 
+    const runs = getUpcomingRuns(item.course);
+    const runField = document.createElement("div");
+    const runLabel = document.createElement("label");
+    runLabel.textContent = "Course run";
+    const runSelect = document.createElement("select");
+    const noRunOption = document.createElement("option");
+    noRunOption.value = "";
+    noRunOption.textContent = runs.length ? "Choose a run" : "No upcoming run listed";
+    runSelect.appendChild(noRunOption);
+    runs.forEach((run) => {
+      const option = document.createElement("option");
+      option.value = String(run.id);
+      option.textContent = `${formatDate(run.start_date)}${run.delivery_mode ? ` - ${run.delivery_mode}` : ""}`;
+      runSelect.appendChild(option);
+    });
+    runSelect.value = item.selectedRunId ? String(item.selectedRunId) : "";
+    runSelect.disabled = runs.length === 0;
+    runSelect.addEventListener("change", async () => {
+      item.selectedRunId = runSelect.value;
+      const selectedRun = getSelectedRun(item);
+      if (selectedRun && selectedRun.start_date) item.plannedStart = selectedRun.start_date;
+      await savePlanner();
+      renderPlan();
+    });
+    runField.append(runLabel, runSelect);
+
     const dateField = document.createElement("div");
     const dateLabel = document.createElement("label");
     dateLabel.textContent = "Target start";
@@ -615,7 +940,7 @@ function renderPlan() {
       renderPlan();
     });
     creditField.append(creditLabel, credit);
-    controls.append(statusField, dateField, creditField);
+    controls.append(statusField, runField, dateField, creditField);
 
     const allocationRow = document.createElement("div");
     allocationRow.className = "allocation";
@@ -634,6 +959,13 @@ function renderPlan() {
     });
 
     card.append(head, controls, allocationRow);
+    if (conflicts.has(index)) {
+      const warning = document.createElement("p");
+      warning.className = "conflict-warning";
+      warning.setAttribute("role", "alert");
+      warning.textContent = `Schedule conflict with ${conflicts.get(index)}. Select another run or change the target date.`;
+      card.appendChild(warning);
+    }
     elements.planList.appendChild(card);
   });
 
@@ -706,17 +1038,59 @@ function renderCareerContext() {
   });
 }
 
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function requestJson(url, options = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= state.network.retries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      state.network.timeoutSeconds * 1000
+    );
+    try {
+      const headers = {
+        ...(options.headers || {}),
+        ...(state.network.apiAccessToken
+          ? { Authorization: `Bearer ${state.network.apiAccessToken}` }
+          : {})
+      };
+      const response = await fetch(url, { ...options, headers, signal: controller.signal });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(data.detail || `Backend returned HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      lastError = error.name === "AbortError"
+        ? new Error(`Request timed out after ${state.network.timeoutSeconds} seconds`)
+        : error;
+      const retryable = !error.status || error.status === 408 || error.status === 429 || error.status >= 500;
+      if (attempt < state.network.retries && retryable) {
+        await wait(500 * (attempt + 1));
+        continue;
+      }
+      break;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+  throw lastError;
+}
+
 async function fetchJson(url) {
-  const response = await fetch(url, {
+  return requestJson(url, {
     method: "GET",
     headers: { Accept: "application/json" }
   });
-  if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}`);
-  return response.json();
 }
 
 async function postJson(url, body) {
-  const response = await fetch(url, {
+  return requestJson(url, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -724,8 +1098,6 @@ async function postJson(url, body) {
     },
     body: JSON.stringify(body)
   });
-  if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}`);
-  return response.json();
 }
 
 async function checkBackend() {
@@ -733,10 +1105,12 @@ async function checkBackend() {
     await fetchJson(`${state.backendBaseUrl}/health`);
     elements.connectionStatus.className = "connection online";
     elements.connectionText.textContent = "Backend connected";
+    elements.retryConnection.hidden = true;
     return true;
   } catch (error) {
     elements.connectionStatus.className = "connection offline";
-    elements.connectionText.textContent = "Backend unavailable";
+    elements.connectionText.textContent = `Backend unavailable: ${error.message}`;
+    elements.retryConnection.hidden = false;
     return false;
   }
 }
@@ -776,6 +1150,7 @@ async function searchCourses(keyword) {
     }
     elements.connectionStatus.className = "connection online";
     elements.connectionText.textContent = "Backend connected";
+    elements.retryConnection.hidden = true;
   } catch (error) {
     state.searchResults = [];
     clearElement(elements.courseResults);
@@ -784,6 +1159,7 @@ async function searchCourses(keyword) {
     );
     elements.connectionStatus.className = "connection offline";
     elements.connectionText.textContent = "Backend unavailable";
+    elements.retryConnection.hidden = false;
   } finally {
     elements.searchButton.disabled = false;
   }
@@ -834,7 +1210,7 @@ async function loadRecommendations() {
   }
 }
 
-async function loadPathway() {
+async function loadPathway(includeNarrative = false) {
   clearElement(elements.pathwayContent);
   const gaps = getSkillGaps();
   if (!getSelectedJob() || !getFocusSkills(getSelectedJob()).length) {
@@ -850,6 +1226,7 @@ async function loadPathway() {
 
   elements.pathwayContent.appendChild(createMessage("Building your three-stage pathway..."));
   elements.refreshPathway.disabled = true;
+  elements.generateNarrative.disabled = true;
   const requestId = ++state.pathwayRequestId;
   try {
     const data = await postJson(
@@ -857,10 +1234,14 @@ async function loadPathway() {
       {
         skill_gaps: gaps.map((item) => ({
           skill: item.skill,
-          current_level: item.currentLevel
+          current_level: item.currentLevel,
+          job_skill: item.jobSkill,
+          source_evidence: item.sourceEvidence
         })),
         available_credit: state.settings.creditBalance,
-        monthly_hours: state.settings.monthlyHours
+        monthly_hours: state.settings.monthlyHours,
+        target_role: getSelectedJob().title || "",
+        include_narrative: includeNarrative
       }
     );
     if (requestId !== state.pathwayRequestId) return;
@@ -876,6 +1257,7 @@ async function loadPathway() {
   } finally {
     if (requestId === state.pathwayRequestId) {
       elements.refreshPathway.disabled = false;
+      elements.generateNarrative.disabled = false;
     }
   }
 }
@@ -884,17 +1266,14 @@ async function addCourseToPlan(course) {
   if (state.plan.some((item) => item.course.id === course.id)) return;
 
   let detailedCourse = course;
-  try {
-    const data = await fetchJson(`${state.backendBaseUrl}/api/courses/${course.id}`);
-    if (data && data.course) detailedCourse = data.course;
-  } catch (error) {
-    detailedCourse = course;
-  }
+  detailedCourse = await loadCourseDetails(course);
+  const firstRun = getUpcomingRuns(detailedCourse)[0];
 
   state.plan.push({
     course: detailedCourse,
     status: "planned",
-    plannedStart: "",
+    plannedStart: firstRun?.start_date || "",
+    selectedRunId: firstRun?.id ? String(firstRun.id) : "",
     creditRequested: getCourseFee(detailedCourse)
   });
   await savePlanner();
@@ -913,13 +1292,74 @@ async function removePlanItem(index) {
   renderPathway();
 }
 
+function escapeCalendarText(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function calendarDate(value, addDay = false) {
+  const date = new Date(`${value}T00:00:00`);
+  if (addDay) date.setDate(date.getDate() + 1);
+  return date.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+function exportPlanCalendar() {
+  const events = state.plan.flatMap((item, index) => {
+    const range = getPlanDateRange(item);
+    if (!range) return [];
+    const run = getSelectedRun(item);
+    return [
+      "BEGIN:VEVENT",
+      `UID:skillsfuture-${item.course.id}-${index}@local`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`,
+      `DTSTART;VALUE=DATE:${calendarDate(range.start)}`,
+      `DTEND;VALUE=DATE:${calendarDate(range.end, true)}`,
+      `SUMMARY:${escapeCalendarText(item.course.title)}`,
+      `LOCATION:${escapeCalendarText(run?.venue || "")}`,
+      `DESCRIPTION:${escapeCalendarText(`Status: ${item.status || "planned"}. Verify course dates with the provider.`)}`,
+      "END:VEVENT"
+    ];
+  });
+  if (!events.length) {
+    window.alert("Add a target start date or select a course run before exporting.");
+    return;
+  }
+  const calendar = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//SkillsFuture Course Planner//EN",
+    "CALSCALE:GREGORIAN",
+    ...events,
+    "END:VCALENDAR"
+  ].join("\r\n");
+  const url = URL.createObjectURL(new Blob([calendar], { type: "text/calendar;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "skillsfuture-learning-plan.ics";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 async function loadDashboard() {
   const stored = await storageGet([
     "backendUrl",
+    "apiAccessToken",
+    "retryCount",
+    "timeoutSeconds",
     HISTORY_STORAGE_KEY,
     PLANNER_STORAGE_KEY
   ]);
   state.backendBaseUrl = deriveBackendBase(stored.backendUrl || DEFAULT_BACKEND_URL);
+  state.network.apiAccessToken = String(stored.apiAccessToken || "");
+  state.network.retries = clamp(toNumber(stored.retryCount, DEFAULT_RETRY_COUNT), 0, 3);
+  state.network.timeoutSeconds = clamp(
+    toNumber(stored.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+    5,
+    120
+  );
   state.history = Array.isArray(stored[HISTORY_STORAGE_KEY])
     ? stored[HISTORY_STORAGE_KEY]
     : [];
@@ -930,6 +1370,11 @@ async function loadDashboard() {
     state.settings.monthlyHours = Math.max(toNumber(planner.settings.monthlyHours, 20), 1);
   }
   state.plan = Array.isArray(planner.plan) ? planner.plan : [];
+  state.comparison = Array.isArray(planner.comparison) ? planner.comparison.slice(0, 3) : [];
+  state.feedback = planner.feedback && typeof planner.feedback === "object" ? planner.feedback : {};
+  state.pathwayOrder = planner.pathwayOrder && typeof planner.pathwayOrder === "object"
+    ? planner.pathwayOrder
+    : {};
   state.skillLevels = planner.skillLevels && typeof planner.skillLevels === "object"
     ? planner.skillLevels
     : {};
@@ -938,6 +1383,7 @@ async function loadDashboard() {
   elements.monthlyHours.value = String(state.settings.monthlyHours);
   renderSummary();
   renderPlan();
+  renderComparison();
   renderCourseResults();
   renderCareerContext();
   renderRecommendations();
@@ -953,14 +1399,14 @@ elements.creditBalance.addEventListener("input", async () => {
   await savePlanner();
   renderPlan();
 });
-elements.creditBalance.addEventListener("change", loadPathway);
+elements.creditBalance.addEventListener("change", () => loadPathway(false));
 
 elements.monthlyHours.addEventListener("input", async () => {
   state.settings.monthlyHours = Math.max(toNumber(elements.monthlyHours.value, 1), 1);
   await savePlanner();
   renderSummary();
 });
-elements.monthlyHours.addEventListener("change", loadPathway);
+elements.monthlyHours.addEventListener("change", () => loadPathway(false));
 
 elements.courseSearchForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -971,11 +1417,28 @@ elements.jobSelect.addEventListener("change", () => {
   state.selectedJobId = elements.jobSelect.value;
   renderCareerContext();
   loadRecommendations();
-  loadPathway();
+  loadPathway(false);
 });
 
 elements.refreshRecommendations.addEventListener("click", loadRecommendations);
-elements.refreshPathway.addEventListener("click", loadPathway);
+elements.refreshPathway.addEventListener("click", () => loadPathway(false));
+elements.generateNarrative.addEventListener("click", () => loadPathway(true));
+elements.clearComparison.addEventListener("click", async () => {
+  state.comparison = [];
+  await savePlanner();
+  renderComparison();
+  renderCourseResults();
+  renderRecommendations();
+});
+elements.exportCalendar.addEventListener("click", exportPlanCalendar);
+elements.printPlan.addEventListener("click", () => window.print());
+elements.retryConnection.addEventListener("click", async () => {
+  elements.retryConnection.disabled = true;
+  elements.connectionText.textContent = "Checking backend";
+  const online = await checkBackend();
+  if (online) await Promise.all([loadRecommendations(), loadPathway(false)]);
+  elements.retryConnection.disabled = false;
+});
 
 elements.clearPlan.addEventListener("click", async () => {
   if (!state.plan.length) return;

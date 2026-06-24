@@ -265,6 +265,14 @@ async function main() {
     "document.querySelectorAll('#pathwayContent .pathway-stage').length > 0",
     90000
   );
+  await dashboardClient.send("Runtime.evaluate", {
+    expression: "document.getElementById('generateNarrative').click()"
+  });
+  await waitForExpression(
+    dashboardClient,
+    "document.querySelector('#pathwayContent .narrative-panel')?.textContent.includes('Grounded AI plan')",
+    120000
+  );
 
   const dashboardBefore = await dashboardClient.send("Runtime.evaluate", {
     expression: `JSON.stringify({
@@ -275,11 +283,57 @@ async function main() {
       firstSkill: document.querySelector('.skill-assessment-name')?.textContent || '',
       pathwayStages: document.querySelectorAll('#pathwayContent .pathway-stage').length,
       pathwayActions: [...document.querySelectorAll('#pathwayContent .pathway-stage')]
-        .every((item) => item.textContent.includes('Action:') && item.textContent.includes('Outcome:'))
+        .every((item) => item.textContent.includes('Action:') && item.textContent.includes('Outcome:')),
+      narrativeSource: document.querySelector('.narrative-source')?.textContent || '',
+      narrativeOverview: document.querySelector('.narrative-panel p')?.textContent || '',
+      narrativeGuidanceCount: document.querySelectorAll('.pathway-guidance').length
     })`,
     returnByValue: true
   });
   const dashboardBeforeValue = JSON.parse(dashboardBefore.result.value);
+
+  await dashboardClient.send("Runtime.evaluate", {
+    expression: `(() => {
+      const compare = document.querySelector('#recommendedCourses .course-card .card-actions .button');
+      compare && compare.click();
+    })()`
+  });
+  await waitForExpression(
+    dashboardClient,
+    "!document.getElementById('comparisonPanel').hidden && document.querySelectorAll('.comparison-table td').length > 0",
+    30000
+  );
+
+  await dashboardClient.send("Runtime.evaluate", {
+    expression: `(() => {
+      const relevant = [...document.querySelectorAll('#recommendedCourses .feedback-actions .button')]
+        .find((button) => button.textContent === 'Relevant');
+      relevant && relevant.click();
+    })()`
+  });
+  await waitForExpression(
+    dashboardClient,
+    "[...document.querySelectorAll('#recommendedCourses .feedback-actions .button.active')].some((button) => button.textContent === 'Relevant')",
+    30000
+  );
+
+  const reorderCheck = await dashboardClient.send("Runtime.evaluate", {
+    expression: `(() => {
+      const stages = [...document.querySelectorAll('#pathwayContent .pathway-stage')];
+      const before = stages[0]?.querySelector('.pathway-course strong')?.textContent || '';
+      const down = stages[0]?.querySelector('.pathway-order-actions button:last-child');
+      if (stages.length > 1 && down && !down.disabled) down.click();
+      return { before, stageCount: stages.length };
+    })()`,
+    returnByValue: true
+  });
+  if (reorderCheck.result.value.stageCount > 1) {
+    await waitForExpression(
+      dashboardClient,
+      `document.querySelector('#pathwayContent .pathway-stage .pathway-course strong')?.textContent !== ${JSON.stringify(reorderCheck.result.value.before)}`,
+      30000
+    );
+  }
 
   await dashboardClient.send("Runtime.evaluate", {
     expression: `(() => {
@@ -317,6 +371,18 @@ async function main() {
   );
   await dashboardClient.send("Runtime.evaluate", {
     expression: `(() => {
+      const status = document.querySelector('#planList .plan-card select');
+      status.value = 'completed';
+      status.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`
+  });
+  await waitForExpression(
+    dashboardClient,
+    "document.getElementById('progressText')?.textContent.includes('100%')",
+    30000
+  );
+  await dashboardClient.send("Runtime.evaluate", {
+    expression: `(() => {
       const credit = document.getElementById('creditBalance');
       credit.value = '0';
       credit.dispatchEvent(new Event('input', { bubbles: true }));
@@ -325,6 +391,18 @@ async function main() {
   await waitForExpression(
     dashboardClient,
     "document.getElementById('cashMetric')?.textContent !== '$0.00'",
+    30000
+  );
+  await dashboardClient.send("Runtime.evaluate", {
+    expression: `(() => {
+      const relevant = [...document.querySelectorAll('#recommendedCourses .feedback-actions .button')]
+        .find((button) => button.textContent === 'Relevant');
+      relevant && relevant.click();
+    })()`
+  });
+  await waitForExpression(
+    dashboardClient,
+    "[...document.querySelectorAll('#recommendedCourses .feedback-actions .button.active')].some((button) => button.textContent === 'Relevant')",
     30000
   );
 
@@ -339,6 +417,12 @@ async function main() {
       plannedFees: document.getElementById('feeMetric')?.textContent || '',
       creditUsed: document.getElementById('usedMetric')?.textContent || '',
       cashRequired: document.getElementById('cashMetric')?.textContent || ''
+      ,comparisonVisible: !document.getElementById('comparisonPanel').hidden
+      ,feedbackRecorded: [...document.querySelectorAll('#recommendedCourses .feedback-actions .button.active')]
+        .some((button) => button.textContent === 'Relevant')
+      ,progress: document.getElementById('progressText')?.textContent || ''
+      ,runControl: Boolean(document.querySelector('#planList .plan-card select'))
+      ,exportControls: Boolean(document.getElementById('exportCalendar') && document.getElementById('printPlan'))
     })`,
     returnByValue: true
   });
@@ -354,12 +438,20 @@ async function main() {
     dashboardValidation.before.pathwayStages < 1 ||
     dashboardValidation.before.pathwayStages > 3 ||
     !dashboardValidation.before.pathwayActions ||
+    dashboardValidation.before.narrativeSource !== "Grounded AI plan" ||
+    !dashboardValidation.before.narrativeOverview ||
+    dashboardValidation.before.narrativeGuidanceCount !== dashboardValidation.before.pathwayStages ||
     dashboardValidation.after.firstGap !== "No gap" ||
     dashboardValidation.after.pathwayStages < 1 ||
     !dashboardValidation.after.pathwayTotals.includes("Fees") ||
     dashboardValidation.after.planCards !== 1 ||
     dashboardValidation.after.plannedFees === "$0.00" ||
-    dashboardValidation.after.cashRequired === "$0.00"
+    dashboardValidation.after.cashRequired === "$0.00" ||
+    !dashboardValidation.after.comparisonVisible ||
+    !dashboardValidation.after.feedbackRecorded ||
+    !dashboardValidation.after.progress.includes("100%") ||
+    !dashboardValidation.after.runControl ||
+    !dashboardValidation.after.exportControls
   ) {
     throw new Error(`Dashboard workflow validation failed: ${JSON.stringify(dashboardValidation)}`);
   }
@@ -368,8 +460,37 @@ async function main() {
     format: "png",
     captureBeyondViewport: false
   });
-  const screenshotPath = path.join(os.tmpdir(), "skillsfuture-phase2-pathway.png");
+  const screenshotPath = path.join(os.tmpdir(), "skillsfuture-phase7-desktop.png");
   fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
+
+  await dashboardClient.send("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true
+  });
+  const mobileLayout = await dashboardClient.send("Runtime.evaluate", {
+    expression: `({
+      viewport: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      visiblePanels: [...document.querySelectorAll('.panel')].filter((panel) => !panel.hidden).length,
+      planCards: document.querySelectorAll('#planList .plan-card').length
+    })`,
+    returnByValue: true
+  });
+  if (
+    mobileLayout.result.value.documentWidth > mobileLayout.result.value.viewport + 1 ||
+    mobileLayout.result.value.visiblePanels < 1 ||
+    mobileLayout.result.value.planCards !== 1
+  ) {
+    throw new Error(`Mobile layout validation failed: ${JSON.stringify(mobileLayout.result.value)}`);
+  }
+  const mobileScreenshot = await dashboardClient.send("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: false
+  });
+  const mobileScreenshotPath = path.join(os.tmpdir(), "skillsfuture-phase7-mobile.png");
+  fs.writeFileSync(mobileScreenshotPath, Buffer.from(mobileScreenshot.data, "base64"));
 
   const summary = {
     status: "passed",
@@ -385,7 +506,9 @@ async function main() {
     modal_preview: response.result.value.text.replace(/\s+/g, " ").trim().slice(0, 240),
     console_logged_result: consoleLogs.some((entry) => entry.args.join(" ").includes("SkillsFuture analysis result")),
     dashboard: dashboardValidation,
-    dashboard_screenshot: screenshotPath
+    dashboard_screenshot: screenshotPath,
+    mobile_layout: mobileLayout.result.value,
+    mobile_screenshot: mobileScreenshotPath
   };
 
   fs.writeFileSync(VALIDATION_LOG, JSON.stringify(summary, null, 2));
