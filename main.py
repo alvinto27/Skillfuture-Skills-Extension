@@ -70,14 +70,24 @@ if settings.ALLOW_LOCAL_DEVELOPMENT_ORIGINS:
     cors_origins.extend([
         "http://localhost:8000",
         "http://127.0.0.1:8000",
+        "https://www.mycareersfuture.gov.sg",
+        "https://mycareersfuture.gov.sg",
         "null",
+        "https://www.linkedin.com",
+        "https://linkedin.com",
+        "https://www.linkedin.com/jobs",
+        "https://linkedin.com/jobs",
+        "https://www.jobstreet.com.sg",
+        "https://jobstreet.com.sg",
+        "https://sg.jobstreet.com",
+        "https://*.jobstreet.com.sg/"
     ])
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_origin_regex=(
-        r"^chrome-extension://[a-z]{32}$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^file://.*$"
+        r"^chrome-extension://[a-z]{32}$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https?://(www\.)?mycareersfuture\.gov\.sg$|^file://.*$"
         if settings.ALLOW_LOCAL_DEVELOPMENT_ORIGINS
         else None
     ),
@@ -206,7 +216,7 @@ async def reliability_middleware(request: Request, call_next):
 
 
 class JobRequest(BaseModel):
-    job_description: str = Field(min_length=10, max_length=MAX_JOB_DESCRIPTION_LENGTH)
+    job_description: str = Field(min_length=1, max_length=MAX_JOB_DESCRIPTION_LENGTH)
     job_data: dict[str, Any] | None = None
     include_rag: bool = False
 
@@ -490,8 +500,10 @@ def analyze_job_uncached(job_description, include_rag=False):
         )
         extracted_skills = normalize_extracted_skills(json.loads(raw_response))
     except json.JSONDecodeError as exc:
+        logging.exception("OpenAI returned invalid skill JSON")
         raise HTTPException(status_code=502, detail="OpenAI returned invalid skill JSON") from exc
     except Exception as exc:
+        logging.exception("Skill extraction failed")
         raise HTTPException(status_code=502, detail="Skill extraction failed") from exc
 
     if not extracted_skills:
@@ -557,8 +569,8 @@ def analyze_job_uncached(job_description, include_rag=False):
 @app.post("/analyze-job")
 async def analyze_job(request: JobRequest):
     job_description = request.job_description.strip()
-    if len(job_description) < 10:
-        raise HTTPException(status_code=400, detail="job_description is too short")
+    if len(job_description) == 0:
+        raise HTTPException(status_code=400, detail="job_description is required")
     if skill_index_error:
         raise HTTPException(status_code=503, detail=skill_index_error)
     if client is None:

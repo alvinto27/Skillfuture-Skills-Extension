@@ -1,246 +1,197 @@
 # SkillsFuture Job Skill Matcher
 
-Browser extension and FastAPI backend for extracting skills from job descriptions, matching them to the local SkillsFuture skill dictionary, and planning courses against a user-entered SkillsFuture Credit balance.
+A local FastAPI backend plus a browser extension for extracting skills from job descriptions, matching them to SkillsFuture skill data, and planning course pathways.
 
-## Architecture
+## Overview
 
-```text
-Job page
-  -> Chrome/Edge content script
-  -> POST /analyze-job
-  -> OpenAI skill extraction
-  -> local sentence-transformer matching
-  -> SkillsFuture skill results and optional grounded RAG
-  -> course planner backed by SQLite
-```
+- Backend: `main.py` runs a FastAPI app
+- Extension: `Skillfuture-Skills-Extension/chrome_extension` injects UI into supported job sites
+- Local data: skill embeddings, course database, course run data, and semantic course index
+- Optional OpenAI usage: job skill extraction and grounded RAG summarization
 
-Course and skill data remain local:
+## What the project uses
 
-- Skill embeddings: `skills_with_local_embeddings.pkl`
-- Course directory: `MySkillsFutureCourseDirectory.xlsx`
-- Course runs: `MySkillsFutureCourseRun.xlsx`
-- Normalized course database: `skillsfuture_courses.sqlite3`
+- FastAPI backend API
+- SQLite course database (`skillsfuture_courses.sqlite3`)
+- Local skill embeddings (`skills_with_local_embeddings.pkl`)
+- SentenceTransformer semantic retrieval for courses
+- Chrome/Edge manifest v3 extension for page integration
 
-The project does not call a remote course dataset API.
+## Prerequisites
 
-## Reliability
-
-Phase 5 reliability controls are enabled by default:
-
-- `GET /api/courses` supports `page` and `page_size` and returns pagination metadata.
-- Repeated job analyses and query embeddings use bounded in-memory TTL caches.
-- `/health` reports missing, corrupt, or stale skill and course indexes.
-- Recommendation endpoints refuse to serve a stale semantic course index.
-- API requests produce structured JSON logs with request IDs, status, and duration.
-- OpenAI and API requests have explicit timeouts.
-- Expensive analysis and recommendation endpoints use per-client in-memory rate limits.
-- The extension provides configurable retries, request timeouts, and a reconnect action.
-
-Configure backend reliability in `config.py`:
-
-```python
-API_REQUEST_TIMEOUT_SECONDS = 45
-OPENAI_TIMEOUT_SECONDS = 30
-OPENAI_MAX_RETRIES = 1
-JOB_ANALYSIS_CACHE_TTL_SECONDS = 900
-JOB_ANALYSIS_CACHE_MAX_SIZE = 128
-QUERY_EMBEDDING_CACHE_TTL_SECONDS = 1800
-QUERY_EMBEDDING_CACHE_MAX_SIZE = 256
-RATE_LIMIT_REQUESTS = 30
-RATE_LIMIT_WINDOW_SECONDS = 60
-```
-
-The caches and rate limiter are process-local. A production deployment with multiple workers should use a shared store such as Redis.
-
-## Project Layout
-
-```text
-main.py                              FastAPI application
-course_recommender.py                Course and pathway ranking
-skillsfuture_db.py                   SQLite access and migrations
-skillsfuture_sync.py                 Local Excel import service
-sync_skillsfuture_data.py            Import CLI
-precompute_embeddings_local.py       Skill embedding generator
-skillsfuture_config.py               Non-secret configuration loader
-config.example.py                    Local configuration template
-migrations/                          SQLite schema
-data/career_roles.json               Initial local role taxonomy
-tests/                               Backend unit tests
-Skillfuture-Skills-Extension/
-  chrome_extension/                  Manifest V3 extension
-```
+- Python 3.12+
+- PowerShell or terminal access
+- Chrome or Edge for extension testing
 
 ## Setup
 
+1. Create a virtual environment:
+
 ```powershell
 python -m venv venv
+```
+
+2. Activate the virtual environment:
+
+```powershell
+venv\Scripts\Activate.ps1
+```
+
+3. Install dependencies:
+
+```powershell
 venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+4. Copy the example config:
+
+```powershell
 Copy-Item config.example.py config.py
 ```
 
-Set the OpenAI key in `config.py`:
+5. Open `config.py` and set your OpenAI API key:
 
 ```python
 OPENAI_API_KEY = "your-key"
 ```
 
-`config.py`, local databases, virtual environments, caches, and validation logs are ignored by Git.
+## Configuration
 
-The backend reads secrets only from ignored `config.py`; `.env` files are not used. If an OpenAI key was ever committed, pasted into logs, or shared outside this machine, revoke it in the provider dashboard and replace it in `config.py`. Key revocation cannot be performed by this repository.
+In `config.py`, adjust only non-secret application settings and local paths.
 
-For production extension access, configure:
+Required settings:
 
-```python
-EXTENSION_ID = "your-32-character-extension-id"
-ALLOW_LOCAL_DEVELOPMENT_ORIGINS = False
-API_ACCESS_TOKEN = "a-long-random-backend-access-token"
-MAX_REQUEST_BODY_BYTES = 128000
-```
+- `OPENAI_API_KEY` — your OpenAI key
 
-Set the same backend access token in the extension options page. With local development origins disabled, CORS accepts only the configured extension origin. Authentication is optional for local single-user development but must be enabled before exposing the API or supporting multiple users.
+Local development settings:
 
-## Prepare Data
+- `ALLOW_LOCAL_DEVELOPMENT_ORIGINS = True` to permit local browser page origins
+- `API_ACCESS_TOKEN = ""` for no auth in local development
 
-Generate the local skill index when the source skill workbook changes:
+Production settings:
+
+- `EXTENSION_ID = "your-32-character-extension-id"`
+- `ALLOW_LOCAL_DEVELOPMENT_ORIGINS = False`
+- `API_ACCESS_TOKEN = "a-long-random-backend-access-token"
+
+## Prepare data
+
+### Skill index
+
+Build local skill embeddings if you need to refresh or regenerate them:
 
 ```powershell
 venv\Scripts\python.exe precompute_embeddings_local.py
 ```
 
-Inspect the local course files:
+### Course import
+
+Inspect the course files first:
 
 ```powershell
 venv\Scripts\python.exe sync_skillsfuture_data.py --dataset courses --dry-run
 venv\Scripts\python.exe sync_skillsfuture_data.py --dataset course-runs --dry-run
 ```
 
-Import both course datasets:
+Import the course data:
 
 ```powershell
 venv\Scripts\python.exe sync_skillsfuture_data.py
 ```
 
-Use `--force` to reimport files whose hashes have not changed.
+Use `--force` to reimport data even when hashes have not changed.
 
-Build the semantic course index after importing or changing course data:
+### Semantic course index
+
+Build the local semantic course index after importing or changing course data:
 
 ```powershell
 venv\Scripts\python.exe precompute_course_embeddings.py
 ```
 
-Restart the backend after rebuilding the index. Course retrieval runs locally and does not use OpenAI tokens.
+## Run the backend
 
-## Run Backend
+Start the FastAPI app:
 
 ```powershell
 venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Use reload only while editing:
+For development with auto reload:
 
 ```powershell
 venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Validate health:
+## Verify the backend
+
+Check health:
 
 ```powershell
 curl.exe http://localhost:8000/health
 ```
 
-If `course_semantic_index.status` is `stale` or `unavailable`, rebuild it before serving recommendations:
+Expected results:
+
+- `skills_loaded` should be greater than `0`
+- `course_database_ready` should be `true`
+- `course_semantic_index_ready` should be `true`
+- `openai_configured` should be `true` if your OpenAI key is set
+
+If `course_semantic_index_ready` is `false`, run:
 
 ```powershell
 venv\Scripts\python.exe precompute_course_embeddings.py
 ```
 
-Validate job analysis:
+## Run the extension
+
+1. Open `edge://extensions` or `chrome://extensions`
+2. Enable Developer mode
+3. Load unpacked extension from `Skillfuture-Skills-Extension/chrome_extension`
+4. Start the backend
+5. Open a supported job page
+6. Click **Analyze with SkillsFuture**
+
+## Local development and CORS
+
+For local page injection on `mycareersfuture.gov.sg`, keep:
+
+```python
+ALLOW_LOCAL_DEVELOPMENT_ORIGINS = True
+```
+
+If you want production-style security, set:
+
+```python
+ALLOW_LOCAL_DEVELOPMENT_ORIGINS = False
+EXTENSION_ID = "your-32-character-extension-id"
+API_ACCESS_TOKEN = "your-token"
+```
+
+Then use the same token in extension options.
+
+## API endpoints
+
+- `GET /health`
+- `POST /analyze-job`
+- `GET /api/career-roles`
+- `GET /api/courses`
+- `GET /api/courses/{course_id}`
+- `POST /api/recommendations/courses`
+- `POST /api/recommendations/learning-pathway`
+- `POST /api/recommendations/course-pathway`
+- `POST /api/recommendations/feedback`
+
+### Example analyze request
 
 ```powershell
 curl.exe -X POST http://localhost:8000/analyze-job `
   -H "Content-Type: application/json" `
-  -d "{\"job_description\":\"Python SQL API cloud deployment data pipeline role\"}"
+  -d "{\"job_description\": \"Python developer with SQL and REST API experience\"}"
 ```
 
-Set `"include_rag": true` in the request body to add one grounded OpenAI recommendation call after local vector retrieval.
-
-## Run Extension
-
-1. Open `edge://extensions` or `chrome://extensions`.
-2. Enable Developer mode.
-3. Select **Load unpacked**.
-4. Select `Skillfuture-Skills-Extension/chrome_extension`.
-5. Start the backend.
-6. Open a supported job page.
-7. Select **Analyze with SkillsFuture**.
-
-Reload the unpacked extension after changing extension files.
-
-The dashboard provides:
-
-- A 0–3 self-assessment for each extracted job skill
-- Gap-based recommendations that exclude skills marked proficient
-- A maximum three-stage pathway: Foundation, Core Capability, and Applied Evidence
-- Job-grounded semantic course recommendations
-- Semantic course search
-- Learning-plan statuses and target dates
-- User-controlled credit allocation
-- Estimates for subsidized fees, remaining credit, cash payable, and learning hours
-- Comparison of up to three courses
-- Upcoming course-run selection and schedule-conflict warnings
-- Persistent pathway reordering and course progress states
-- Relevant/not-relevant recommendation feedback
-- Calendar export and print-to-PDF output
-
-The proficiency scale is:
-
-```text
-0 No experience
-1 Beginner
-2 Working knowledge
-3 Proficient
-```
-
-Course recommendations target levels below `3`. This is a user self-assessment, not an inferred or certified proficiency score.
-
-Each pathway stage contains one primary course, one alternative where available, dataset-backed reasoning, estimated fee and credit allocation, one practical action, and one measurable outcome.
-
-Select **Explain with AI** to generate a readable career-plan narrative. The backend sends only the already selected pathway stages and dataset evidence to OpenAI. Returned stage numbers, skills, and course IDs are validated against the deterministic pathway. Invalid or unavailable LLM output is replaced with a deterministic fallback, while fees, credit, duration, and course selection always remain backend-controlled.
-
-Credit calculations are planning estimates. They do not query a live SkillsFuture account or determine funding eligibility.
-
-Use **Export calendar** to download an `.ics` file for plan items with a selected run or target date. Use **Print / PDF** and choose the browser's PDF destination to save the plan.
-
-## Security
-
-- Request bodies and all public request fields are bounded and validated.
-- Feedback accepts only `relevant` or `not_relevant` and verifies referenced IDs.
-- Internal exception details are not returned to clients.
-- Production CORS can be restricted to one extension ID.
-- Optional bearer authentication protects every endpoint except `/health`.
-- The current product is intentionally single-user and stores planner state in extension storage. Do not treat the `local-user` feedback identifier as multi-user authentication.
-
-## API
-
-```text
-GET  /health
-POST /analyze-job
-GET  /api/career-roles
-GET  /api/courses
-GET  /api/courses/{course_id}
-POST /api/recommendations/courses
-POST /api/recommendations/learning-pathway
-POST /api/recommendations/course-pathway
-POST /api/recommendations/feedback
-```
-
-Example course search:
-
-```powershell
-curl.exe "http://localhost:8000/api/courses?keyword=python&page=1&page_size=20"
-```
-
-Example semantic course recommendation:
+### Example course recommendation
 
 ```powershell
 curl.exe -X POST http://localhost:8000/api/recommendations/courses `
@@ -248,7 +199,7 @@ curl.exe -X POST http://localhost:8000/api/recommendations/courses `
   -d "{\"skills\":[\"Python\",\"data analysis\"],\"max_budget\":1000,\"limit\":5}"
 ```
 
-Example actionable pathway:
+### Example pathway request
 
 ```powershell
 curl.exe -X POST http://localhost:8000/api/recommendations/learning-pathway `
@@ -256,16 +207,56 @@ curl.exe -X POST http://localhost:8000/api/recommendations/learning-pathway `
   -d "{\"skill_gaps\":[{\"skill\":\"Python\",\"current_level\":1,\"source_evidence\":\"The role requires Python.\"},{\"skill\":\"SQL\",\"current_level\":2}],\"available_credit\":500,\"monthly_hours\":20,\"target_role\":\"Data Engineer\",\"include_narrative\":true}"
 ```
 
-`include_narrative: true` uses one additional OpenAI call. Leaving it false returns the complete deterministic pathway without additional token usage.
+## Testing
 
-## Tests
+Run backend unit tests:
 
 ```powershell
 venv\Scripts\python.exe -m unittest discover -s tests
+```
+
+Validate extension scripts before browser launch:
+
+```powershell
 node --check Skillfuture-Skills-Extension/chrome_extension/contentScript.js
 node --check Skillfuture-Skills-Extension/chrome_extension/dashboard.js
 ```
 
-## Data Notice
+## Notes
 
-Course data is imported from local SkillsFuture dataset files. Verify current course fees, schedules, eligibility, and credit usage with SkillsFuture Singapore and the training provider. This product is not operated, endorsed, or certified by SkillsFuture Singapore, SSG, or the Singapore Government.
+- The backend stores no user session data outside the local SQLite database.
+- Course and skill data are local; the app does not call a remote SkillsFuture dataset API.
+- If CORS or auth is misconfigured, the browser will block requests before they reach the backend.
+- If the OpenAI key is missing, `/analyze-job` returns `503`.
+
+## Troubleshooting
+
+### `ERR_CONNECTION_REFUSED`
+- Confirm the backend is running on `http://localhost:8000`.
+- Restart with:
+  ```powershell
+  venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+  ```
+- Verify with:
+  ```powershell
+  curl.exe http://localhost:8000/health
+  ```
+
+### `400 Bad Request`
+- Check the request body for the endpoint:
+  - `/analyze-job` requires `job_description` and optional `include_rag`
+  - `/api/recommendations/courses` requires `skills`
+- Ensure `Content-Type: application/json` is set.
+- For browser requests, inspect the DevTools network request body and response detail.
+
+### CORS / preflight failures
+- Keep `ALLOW_LOCAL_DEVELOPMENT_ORIGINS = True` during local browser testing.
+- Ensure the extension is loading from a supported page and the request is sent to `http://localhost:8000`.
+- If using production auth, set `EXTENSION_ID` and `API_ACCESS_TOKEN` consistently in `config.py` and extension options.
+
+### `503 Service Unavailable`
+- If `/analyze-job` returns `503`, check `/health` output.
+- Common causes:
+  - OpenAI key not configured in `config.py`
+  - course semantic index is missing or stale
+  - `skills_with_local_embeddings.pkl` failed to load

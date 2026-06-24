@@ -14,7 +14,7 @@ class Phase6SecurityTests(unittest.TestCase):
 
     def test_job_description_and_feedback_fields_are_validated(self):
         with self.assertRaises(ValidationError):
-            main.JobRequest(job_description="short")
+            main.JobRequest(job_description="")
         with self.assertRaises(ValidationError):
             main.RecommendationFeedbackRequest(
                 course_id=1,

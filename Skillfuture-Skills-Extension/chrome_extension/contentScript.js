@@ -80,12 +80,20 @@
       "[role='main'] [data-testid*='job' i]",
       "[role='main'] [class*='job' i]"
     ],
-    linkedIn: [
-      "section.description__text",
-      ".show-more-less-html__markup",
-      ".jobs-description__content",
-      ".jobs-box__html-content",
-      "#job-details"
+    jobStreet: [
+      "div[class*='job-description' i]",
+      "div[class*='job-desc' i]",
+      "div[class*='job description' i]",
+      "div[class*='description' i]",
+      "section[class*='job-desc' i]",
+      "section[class*='description' i]",
+      "div[id*='jobDescription' i]",
+      "div[id*='jobDescriptionText' i]",
+      "div[id*='description' i]",
+      ".job-desc-module",
+      ".job-details__description",
+      ".job-info__section",
+      ".job-detail-description"
     ],
     generic: [
       "[data-job-description]",
@@ -291,7 +299,7 @@
   function getCurrentSiteKey() {
     const host = window.location.hostname.toLowerCase();
     if (host.includes("mycareersfuture.gov.sg")) return "myCareersFuture";
-    if (host.includes("linkedin.com")) return "linkedIn";
+    if (host.includes("jobstreet.com")) return "jobStreet";
     return "generic";
   }
 
@@ -879,7 +887,7 @@
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), timeoutSeconds * 1000);
       try {
-        const response = await fetch(url, {
+const response = await fetch(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -974,9 +982,9 @@
       }
       const notice = extraction.source === "selection"
         ? {
-            title: "Using selected text",
-            message: "The analysis is based on the text you highlighted on the page."
-          }
+          title: "Using selected text",
+          message: "The analysis is based on the text you highlighted on the page."
+        }
         : null;
       await saveAnalysisHistory(data, extraction);
       showModal({ data, notice });

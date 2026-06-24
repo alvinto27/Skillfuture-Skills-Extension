@@ -3,7 +3,9 @@
   "name": "SkillsFuture Analyzer Hook",
   "version": "1.0.0",
   "description": "Plans, compares, and tracks grounded SkillsFuture learning pathways.",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*"
@@ -16,8 +18,6 @@
         "dashboard.js"
       ],
       "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*",
         "https://www.mycareersfuture.gov.sg/*",
         "https://mycareersfuture.gov.sg/*",
         "https://*.mycareersfuture.gov.sg/*",
@@ -33,8 +33,6 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.linkedin.com/jobs/*",
-        "https://linkedin.com/jobs/*",
         "https://www.mycareersfuture.gov.sg/*",
         "https://mycareersfuture.gov.sg/*",
         "https://*.mycareersfuture.gov.sg/*",
@@ -45,7 +43,9 @@
         "http://127.0.0.1/*",
         "file:///*"
       ],
-      "js": ["contentScript.js"],
+      "js": [
+        "contentScript.js"
+      ],
       "run_at": "document_idle"
     }
   ]
